@@ -1,4 +1,5 @@
 const axios = require("axios");
+const { param } = require("../user");
 const api_domain = "https://api.spoonacular.com/recipes";
 
 
@@ -8,6 +9,39 @@ const api_domain = "https://api.spoonacular.com/recipes";
  * @param {*} recipes_info 
  */
 
+async function getThreeRandomRecipes(){
+    firstRecipe = axios.get(`${api_domain}/random`, {
+        params: {
+        apiKey: process.env.spooncular_apiKey
+        }
+    });
+    secondRecipe = axios.get(`${api_domain}/random`, {
+        params: {
+        apiKey: process.env.spooncular_apiKey
+        }
+    });   
+    thirdRecipe = axios.get(`${api_domain}/random`, {
+        params: {
+        apiKey: process.env.spooncular_apiKey
+        }
+    });
+    let recipes = await Promise.all([firstRecipe, secondRecipe, thirdRecipe]);
+    let recipes_list = [];
+    recipes.forEach(recipe => {
+        let { id, title, readyInMinutes, image, aggregateLikes, vegan, vegetarian, glutenFree } = recipe.data.recipes[0];
+        recipes_list.push({
+            id: id,
+            title: title,
+            readyInMinutes: readyInMinutes,
+            image: image,
+            popularity: aggregateLikes,
+            vegan: vegan,
+            vegetarian: vegetarian,
+            glutenFree: glutenFree
+        });
+    });
+    return recipes_list;
+}
 
 async function getRecipeInformation(recipe_id) {
     return await axios.get(`${api_domain}/${recipe_id}/information`, {
@@ -35,9 +69,23 @@ async function getRecipeDetails(recipe_id) {
     }
 }
 
-
+//returns the recipe details by recipe name
+async function getRecipeDetailsByName(recipe_name,number=5) {
+    let recipe_info = await axios.get(`${api_domain}/complexSearch`, {
+        params: {
+            query: recipe_name,
+            number: number, // number of recipes to return
+            apiKey: process.env.spooncular_apiKey
+        }
+    });
+    if (recipe_info.data.length === 0) {
+        throw { status: 404, message: "Recipe not found" };
+    }
+    return await getRecipeDetails(recipe_info.data[0].id);
+}
 
 exports.getRecipeDetails = getRecipeDetails;
-
+exports.getThreeRandomRecipes = getThreeRandomRecipes;
+exports.getRecipeDetailsByName = getRecipeDetailsByName;
 
 
