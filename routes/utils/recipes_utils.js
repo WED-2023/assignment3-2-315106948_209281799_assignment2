@@ -1,6 +1,7 @@
 const axios = require("axios");
 const { param } = require("../user");
 const api_domain = "https://api.spoonacular.com/recipes";
+let added_recipes = [];
 
 
 
@@ -84,8 +85,18 @@ async function getRecipeDetailsByName(recipe_name,number=5) {
     return await getRecipeDetails(recipe_info.data[0].id);
 }
 
+// Added a new recipe to the list of added recipes
+async function addRecipe(recipe) {
+    
+    if (!added_recipes.includes(recipe.id)) {
+        added_recipes.push(recipe.id);
+    }
+    return recipe;
+}
+
 exports.getRecipeDetails = getRecipeDetails;
 exports.getThreeRandomRecipes = getThreeRandomRecipes;
 exports.getRecipeDetailsByName = getRecipeDetailsByName;
+exports.addRecipe = addRecipe;
 
 

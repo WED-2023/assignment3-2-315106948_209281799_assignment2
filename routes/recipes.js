@@ -36,5 +36,21 @@ router.get("/byName/{name}", async (req, res, next) => {
 });
 
 
-
+router.post("/", async (req, res, next) => {
+  try {
+    const recipe = req.body;
+    if (!recipe || !recipe.id || !recipe.title || !recipe.readyInMinutes || !recipe.image || !recipe.popularity || !recipe.vegan || !recipe.vegetarian || !recipe.glutenFree) {
+      return res.status(400).send("Invalid recipe data");
+    }
+    const newRecipe = await recipes_utils.addRecipe(recipe);
+    res.status(201).send(newRecipe);
+  } catch (error) {
+    if (error.status === 409) {
+      res.status(409).send(error.message);
+    }
+    else{
+      next(error);
+    }
+  }
+});
 module.exports = router;
