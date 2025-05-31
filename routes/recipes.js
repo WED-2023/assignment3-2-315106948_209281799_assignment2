@@ -31,7 +31,11 @@ router.get("/byName/{name}", async (req, res, next) => {
     const recipes = await recipes_utils.getRecipeDetailsByName(req.params.recipeName, req.query.number);
     res.send(recipes);
   } catch (error) {
-    next(error);
+    if (error.status === 404) {
+      res.status(404).send(error.message);
+    } else {
+      next(error);
+    }
   }
 });
 
@@ -39,7 +43,16 @@ router.get("/byName/{name}", async (req, res, next) => {
 router.post("/", async (req, res, next) => {
   try {
     const recipe = req.body;
-    if (!recipe || !recipe.id || !recipe.title || !recipe.readyInMinutes || !recipe.image || !recipe.popularity || !recipe.vegan || !recipe.vegetarian || !recipe.glutenFree) {
+    if (!recipe ||
+      !recipe.id || 
+      !recipe.title || 
+      !recipe.readyInMinutes || 
+      !recipe.image || 
+      !recipe.popularity || 
+      recipe.vegan === undefined ||
+      recipe.vegetarian === undefined ||
+      recipe.glutenFree === undefined
+) {
       return res.status(400).send("Invalid recipe data");
     }
     const newRecipe = await recipes_utils.addRecipe(recipe);
