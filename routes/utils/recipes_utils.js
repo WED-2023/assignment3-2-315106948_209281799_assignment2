@@ -1,5 +1,6 @@
 const axios = require("axios");
 const { param } = require("../user");
+const DButils = require("../utils/DButils");
 const api_domain = "https://api.spoonacular.com/recipes";
 let added_recipes = [];
 
@@ -51,8 +52,27 @@ async function getThreeRandomRecipes(){
  * Req #6: Return the last 3 recipes the user watched
  */
 async function getThreeWatchedRecipes(userId){
-    return [];
+    const query = `SELECT recipe_id FROM watched_recipes WHERE username = '${username}' ORDER BY watched_at DESC LIMIT 3;`;
+    const result = await DButils.execQuery(query);
+    if (result.length === 0) {
+        throw { status: 404, message: "No watched recipes found" };
+    }
+    return result.map(recipe => recipe.recipe_id);
 }
+
+/**
+ * Req #6: Mark a recipe as watched by the user
+ */
+async function markRecipeAsWatched(username, recipeId)
+{
+    const query = `REPLACE INTO watched_recipes (username, recipe_id) VALUES ('${username}', '${recipeId}');`;
+    const result = await DButils.execQuery(query);
+    if (result.affectedRows === 0) {
+        throw { status: 404, message: "Recipe not found" };
+    }
+    return { message: `Recipe ${recipeId} marked as watched for user ${username}` };
+}
+
 
 /**
  * Req #8: Return recipe details by name
@@ -104,54 +124,70 @@ async function getRecipeInformation(recipe_id) {
 /**
  * Req #9: Add a new recipe created by user
  */
-async function addRecipe(recipe) {
-  if (added_recipes.find(r => r.id === recipe.id)) {
-    throw { status: 409, message: "Recipe already exists" };
-  }
-    user_recipes[userId] = user_recipes[userId] || [];
-    user_recipes[userId].push(recipe);
+async function addRecipe(recipe,username) {
+    const {
+        id, name, picture, cooking_time,
+        popularity, vegetarian, gluten_free,
+        watched, saved, servings, instructions
+  } = recipe;
+
+    const recipeQuery = `INSERT INTO recipes (id, name, picture, cooking_time, popularity, vegetarian, gluten_free, watched, saved, servings, instructions)
+    VALUES ('${id}', '${name}', '${picture}', ${cooking_time}, ${popularity}, ${vegetarian}, ${gluten_free}, ${watched}, ${saved}, ${servings}, '${instructions}');`;
+    
+    const userRecipeQuery = `INSERT INTO user_recipes (username, recipe_id) VALUES ('${username}', '${id}');`;
+
+    await DButils.execQuery(recipeQuery);
+    await DButils.execQuery(userRecipeQuery);
     return recipe;
-}
 
-//Requirement number 6: Mark a recipe as watched by the user (added to "watched" list)
-async function markRecipeAsWatched(userId, recipeId)
-{
-    return { message: `Recipe ${recipeId} marked as watched for user ${userId}` };
 }
-
 
 /**
  * Req #10: Get all favorite recipes of a user
  */
-async function getFavoriteRecipes(userId) {
+async function getFavoriteRecipes(username) {
+    const query = `SELECT recipe_id FROM favorite_recipes WHERE username = '${username}';`;
+    const result = await DButils.execQuery(query);
+    return result.map(r => r.recipe_id);
 }
 
 /**
  * Req #10: Mark a recipe as favorite
  */
-async function markRecipeAsFavorite(userId, recipeId) {
+async function markRecipeAsFavorite(username, recipeId) {
+    const query = `REPLACE INTO favorite_recipes (username, recipe_id) VALUES ('${username}', '${recipeId}');`;
+    await DButils.execQuery(query);
 }
+
 
 
 /**
  * Req #11: Return all recipes created by the user
  */
 async function getUserRecipes(userId) {
+    const query = `SELECT recipe_id FROM user_recipes WHERE username = '${username}';`;
+    const result = await DButils.execQuery(query);
+    return result.map(r => r.recipe_id);
 }
 
 /**
  * Req #12: Return family recipes for the user
  */
-async function getFamilyRecipes(userId) {
+async function getFamilyRecipes(username) {
+    const query = `SELECT f.recipe_id FROM family_recipes_info f JOIN user_recipes u ON f.recipe_id = u.recipe_id WHERE u.username = '${username}';`;
+    const result = await DButils.execQuery(query);
+    return result.map(r => r.recipe_id);
 }
 
 /**
  * Req #12: Create a new family recipe
  */
-async function createFamilyRecipe(recipe, userId) {
-    // family_recipes[userId] = family_recipes[userId] || [];
-    // family_recipes[userId].push(recipe);
-    // return recipe;
+async function createFamilyRecipe(info) {
+    const { recipe_id, origin_person, occasion, story } = info;
+    const query = `INSERT INTO family_recipes_info (recipe_id, origin_person, occasion, story)
+                 VALUES ('${recipe_id}', '${origin_person}', '${occasion}', '${story}');`;
+    await DButils.execQuery(query);
+    return info;
 }
 
 /**
