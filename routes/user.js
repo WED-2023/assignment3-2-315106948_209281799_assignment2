@@ -9,7 +9,7 @@ const recipe_utils = require("./utils/recipes_utils");
  */
 router.use(async function (req, res, next) {
   if (req.session && req.session.user_id) {
-    DButils.execQuery("SELECT user_id FROM users").then((users) => {
+    DButils.execQuery("SELECT username FROM users").then((users) => {
       if (users.find((x) => x.user_id === req.session.user_id)) {
         req.user_id = req.session.user_id;
         next();
@@ -53,6 +53,56 @@ router.get('/favorites', async (req,res,next) => {
 });
 
 
+// add a new recipes to the database (My recipes for the user)
+router.post('/myRecipes', async (req, res, next) => {
+  try {
+    const user_id = req.session.user_id;
+    const recipe = req.body;
+    if (!recipe || !recipe.id || !recipe.title || !recipe.readyInMinutes || !recipe.image || !recipe.popularity || recipe.vegan === undefined || recipe.vegetarian === undefined || recipe.glutenFree === undefined) {
+      return res.status(400).send("Invalid recipe data");
+    }
+    const newRecipe = await recipe_utils.addRecipe(recipe, user_id);
+    res.status(201).send(newRecipe);
+  } catch (error) {
+    next(error);
+  }
+});
 
+// get all recipes created by the user
+router.get('/myRecipes', async (req, res, next) => {
+  try {
+    const user_id = req.session.user_id;
+    const recipes = await recipe_utils.getUserRecipes(user_id);
+    res.status(200).send(recipes);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// post a recipe as family recipe
+router.post('/familyRecipes', async (req, res, next) => {
+  try {
+    const user_id = req.session.user_id;
+    const recipe = req.body;
+    if (!recipe || !recipe.id || !recipe.origin_person || !recipe.occasion || !recipe.story) {
+      return res.status(400).send("Invalid recipe data");
+    }
+    const newRecipe = await recipe_utils.createFamilyRecipe(recipe, user_id);
+    res.status(201).send(newRecipe);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// get all family recipes
+router.get('/familyRecipes', async (req, res, next) => {
+  try {
+    const user_id = req.session.user_id;
+    const familyRecipes = await recipe_utils.getFamilyRecipes(user_id);
+    res.status(200).send(familyRecipes);
+  } catch (error) {
+    next(error);
+  }
+});
 
 module.exports = router;

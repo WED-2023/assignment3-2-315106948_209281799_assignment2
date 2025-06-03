@@ -182,10 +182,10 @@ async function getFamilyRecipes(username) {
 /**
  * Req #12: Create a new family recipe
  */
-async function createFamilyRecipe(info) {
-    const { recipe_id, origin_person, occasion, story } = info;
-    const query = `INSERT INTO family_recipes_info (recipe_id, origin_person, occasion, story)
-                 VALUES ('${recipe_id}', '${origin_person}', '${occasion}', '${story}');`;
+async function createFamilyRecipe(recipe, username) {
+    const { recipe_id, origin_person, occasion, story } = recipe;
+    const query = `INSERT INTO family_recipes_info (recipe_id, username, origin_person, occasion, story)
+                 VALUES ('${recipe_id}', '${origin_person}', '${username}', '${occasion}', '${story}');`;
     await DButils.execQuery(query);
     return info;
 }
