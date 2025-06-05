@@ -133,23 +133,39 @@ async function getRecipeInformation(recipe_id) {
 /**
  * Req #9: Add a new recipe created by user
  */
-async function addRecipe(recipe,username) {
-    const {
-        id, name, picture, cooking_time,
-        popularity, vegetarian, gluten_free,
-        watched, saved, servings, instructions
+async function addRecipe(recipe, user_id) {
+  const {
+    id,
+    title,
+    image,
+    readyInMinutes,
+    popularity,
+    vegan,
+    vegetarian,
+    glutenFree
   } = recipe;
 
-    const recipeQuery = `INSERT INTO recipes (id, name, picture, cooking_time, popularity, vegetarian, gluten_free, watched, saved, servings, instructions)
-    VALUES ('${id}', '${name}', '${picture}', ${cooking_time}, ${popularity}, ${vegetarian}, ${gluten_free}, ${watched}, ${saved}, ${servings}, '${instructions}');`;
-    
-    const userRecipeQuery = `INSERT INTO user_recipes (username, recipe_id) VALUES ('${username}', '${id}');`;
+  const recipeQuery = `
+    INSERT INTO recipes (
+      id, title, image, readyInMinutes, popularity,
+      vegan, vegetarian, glutenFree
+    )
+    VALUES (
+      '${id}', '${title}', '${image}', ${readyInMinutes}, ${popularity},
+      ${vegan}, ${vegetarian}, ${glutenFree}
+    );
+  `;
 
-    await DButils.execQuery(recipeQuery);
-    await DButils.execQuery(userRecipeQuery);
-    return recipe;
+  const userRecipeQuery = `
+    INSERT INTO user_recipes (user_id, recipe_id)
+    VALUES (${user_id}, '${id}');
+  `;
 
+  await DButils.execQuery(recipeQuery);
+  await DButils.execQuery(userRecipeQuery);
+  return recipe;
 }
+
 
 /**
  * Req #10: Get all favorite recipes of a user
@@ -173,8 +189,8 @@ async function markRecipeAsFavorite(username, recipeId) {
 /**
  * Req #11: Return all recipes created by the user
  */
-async function getUserRecipes(userId) {
-    const query = `SELECT recipe_id FROM user_recipes WHERE username = '${username}';`;
+async function getUserRecipes(user_id) {
+    const query = `SELECT recipe_id FROM user_recipes WHERE user_id = '${user_id}';`;
     const result = await DButils.execQuery(query);
     return result.map(r => r.recipe_id);
 }
@@ -182,8 +198,8 @@ async function getUserRecipes(userId) {
 /**
  * Req #12: Return family recipes for the user
  */
-async function getFamilyRecipes(username) {
-    const query = `SELECT f.recipe_id FROM family_recipes_info f JOIN user_recipes u ON f.recipe_id = u.recipe_id WHERE u.username = '${username}';`;
+async function getFamilyRecipes(user_id) {
+    const query = `SELECT f.recipe_id FROM family_recipes_info f JOIN user_recipes u ON f.recipe_id = u.recipe_id WHERE u.user_id = '${user_id}';`;
     const result = await DButils.execQuery(query);
     return result.map(r => r.recipe_id);
 }
@@ -191,13 +207,61 @@ async function getFamilyRecipes(username) {
 /**
  * Req #12: Create a new family recipe
  */
-async function createFamilyRecipe(recipe, username) {
-    const { recipe_id, origin_person, occasion, story } = recipe;
-    const query = `INSERT INTO family_recipes_info (recipe_id, username, origin_person, occasion, story)
-                 VALUES ('${recipe_id}', '${origin_person}', '${username}', '${occasion}', '${story}');`;
-    await DButils.execQuery(query);
-    return info;
+async function createFamilyRecipe(recipe, user_id) {
+  const {
+    id,
+    title,
+    image,
+    readyInMinutes,
+    popularity,
+    vegan,
+    vegetarian,
+    glutenFree,
+    origin_person,
+    occasion,
+    story
+  } = recipe;
+
+  // Step 1: Save base recipe data
+  await addRecipe({
+    id,
+    title,
+    image,
+    readyInMinutes,
+    popularity,
+    vegan,
+    vegetarian,
+    glutenFree
+  }, user_id);
+
+  // Step 2: Save family-specific metadata
+  const query = `
+    INSERT INTO family_recipes_info (recipe_id, user_id, origin_person, occasion, story)
+    VALUES ('${id}', ${user_id}, '${origin_person}', '${occasion}', '${story}');
+  `;
+
+  await DButils.execQuery(query);
+
+  return {
+    message: "Family recipe created successfully",
+    recipe_id: id
+  };
 }
+
+
+/**
+ * Return preview details for multiple recipes
+ * @param {Array<string>} recipe_id_array - Array of recipe IDs
+ * @returns {Array<Object>} - Array of recipe preview objects
+ */
+async function getRecipesPreview(recipe_id_array) {
+    const previewPromises = recipe_id_array.map(id => getRecipeDetails(id));
+    const previews = await Promise.all(previewPromises);
+
+    // Filter out any nulls (e.g. 404 or failed fetch)
+    return previews.filter(recipe => recipe !== null);
+}
+
 
 /**
  * Bonus #13: Get preparation steps for a recipe
@@ -290,5 +354,6 @@ module.exports = {
     removeFromMealPlan,
     clearMealPlan,
     getMealProgress,
-    setStepAsDone
+    setStepAsDone,
+    getRecipesPreview
 };
