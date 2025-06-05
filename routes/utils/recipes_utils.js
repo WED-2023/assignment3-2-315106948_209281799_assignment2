@@ -95,19 +95,28 @@ async function getRecipeDetailsByName(recipe_name,number=5) {
  * Req #7: Return full recipe details by ID
  */
 async function getRecipeDetails(recipe_id) {
-    let recipe_info = await getRecipeInformation(recipe_id);
-    let { id, title, readyInMinutes, image, aggregateLikes, vegan, vegetarian, glutenFree } = recipe_info.data;
+    try {
+        let recipe_info = await getRecipeInformation(recipe_id);
+        let { id, title, readyInMinutes, image, aggregateLikes, vegan, vegetarian, glutenFree } = recipe_info.data;
 
-    return {
-        id: id,
-        title: title,
-        readyInMinutes: readyInMinutes,
-        image: image,
-        popularity: aggregateLikes,
-        vegan: vegan,
-        vegetarian: vegetarian,
-        glutenFree: glutenFree,
-        
+        return {
+            id,
+            title,
+            readyInMinutes,
+            image,
+            popularity: aggregateLikes,
+            vegan,
+            vegetarian,
+            glutenFree
+        };
+    } catch (error) {
+        // Handle 404 or other errors here
+        if (error.response && error.response.status === 404) {
+            console.warn(`Recipe with ID ${recipe_id} not found.`);
+            return null;
+        } else {
+            throw error; // rethrow unexpected errors
+        }
     }
 }
 

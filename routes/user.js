@@ -28,6 +28,20 @@ router.post('/favorites', async (req,res,next) => {
   try{
     const user_id = req.session.user_id;
     const recipe_id = req.body.recipeId;
+    // Validate that recipe_id is provided
+    if (!recipe_id) {
+      return res.status(400).send("Recipe ID is required");
+    }
+    // Check if the recipe already exists in favorites
+    const existingFavorites = await user_utils.getFavoriteRecipes(user_id);
+    if (existingFavorites.some(fav => fav.recipe_id === recipe_id)) {
+      return res.status(200).send("Recipe is already in favorites");
+    }
+    // check if the recipe exists in the spoonacular api
+    const recipeExists = await recipe_utils.getRecipeDetails(recipe_id);
+    if (!recipeExists) {
+      return res.status(404).send("Recipe not found");
+    }
     await user_utils.markAsFavorite(user_id,recipe_id);
     res.status(200).send("The Recipe successfully saved as favorite");
     } catch(error){
