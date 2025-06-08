@@ -5,7 +5,6 @@ var path = require("path");
 var logger = require("morgan");
 const session = require("client-sessions");
 const DButils = require("./routes/utils/DButils");
-var cors = require('cors')
 
 var app = express();
 app.use(logger("dev")); //logger
@@ -32,23 +31,9 @@ app.use(express.static(path.join(__dirname, "dist")));
 
 app.get("/",function(req,res)
 { 
-  //remote: 
-  // res.sendFile(path.join(__dirname, '../assignment-3-3-frontend/dist/index.html'));
-  //local:
   res.sendFile(__dirname+"/index.html");
-
 });
 
-// app.use(cors());
-// app.options("*", cors());
-
-// const corsConfig = {
-//   origin: true,
-//   credentials: true
-// };
-
-// app.use(cors(corsConfig));
-// app.options("*", cors(corsConfig));
 
 var port = process.env.PORT || "80"; //local=3000 remote=80
 //#endregion
@@ -83,16 +68,11 @@ app.use("/recipes", recipes);
 app.use("/", auth);
 
 
-
-
-
-
 // Default router
 app.use(function (err, req, res, next) {
   console.error(err);
   res.status(err.status || 500).send({ message: err.message, success: false });
 });
-
 
 
 const server = app.listen(port, () => {

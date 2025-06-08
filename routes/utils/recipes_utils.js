@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { param } = require("../user");
+// const { param } = require("../user");
 const DButils = require("../utils/DButils");
 const api_domain = "https://api.spoonacular.com/recipes";
 let added_recipes = [];
@@ -38,48 +38,6 @@ async function addUserSessionInfo(user_id, recipe){
     }
 }
 
-// /**
-//  * Return 3 random recipes
-//  */
-// async function getThreeRandomRecipes(user_id) {
-//     firstRecipe = axios.get(`${api_domain}/random`, {
-//         params: {
-//         apiKey: process.env.spooncular_apiKey
-//         }
-//     });
-//     secondRecipe = axios.get(`${api_domain}/random`, {
-//         params: {
-//         apiKey: process.env.spooncular_apiKey
-//         }
-//     });   
-//     thirdRecipe = axios.get(`${api_domain}/random`, {
-//         params: {
-//         apiKey: process.env.spooncular_apiKey
-//         }
-//     });
-//     let recipes = await Promise.all([firstRecipe, secondRecipe, thirdRecipe]);
-//     let recipes_list = [];
-    
-//     for (const recipe of recipes) {
-//         let { id, title, readyInMinutes, image, aggregateLikes, vegan, vegetarian, glutenFree } = recipe.data.recipes[0];
-//         let preview = {
-//             id,
-//             title,
-//             readyInMinutes,
-//             image,
-//             popularity: aggregateLikes,
-//             vegan,
-//             vegetarian,
-//             glutenFree
-//         };
-
-//         const enrichedRecipe = await addUserSessionInfo(user_id, preview);
-//         recipes_list.push(enrichedRecipe);
-//     }
-
-//     return recipes_list;
-
-// }
 
 async function getThreeRandomRecipes(user_id) {
     firstRecipe = axios.get(`${api_domain}/random`, {
@@ -176,39 +134,6 @@ async function searchRecipesWithFilters(user_id, recipe_name, number = 5, filter
     return await getRecipesPreview(user_id, ids);
 }
 
-
-/**
- * Return full recipe details by ID
- */
-// async function getRecipeDetails(user_id, recipe_id) {
-//     try {
-//         let recipe_info = await getRecipeInformation(recipe_id);
-//         let { id, title, readyInMinutes, image, aggregateLikes, vegan, vegetarian, glutenFree } = recipe_info.data;
-
-//         let recipe = {
-//             id,
-//             title,
-//             readyInMinutes,
-//             image,
-//             popularity: aggregateLikes,
-//             vegan,
-//             vegetarian,
-//             glutenFree
-//         };
-
-//         // Add user session info (watched, favorite, family)
-//         const enrichedRecipe = await addUserSessionInfo(user_id, recipe);
-//         return enrichedRecipe;
-//     } catch (error) {
-//         // Handle 404 or other errors here
-//         if (error.response && error.response.status === 404) {
-//             console.warn(`Recipe with ID ${recipe_id} not found.`);
-//             return null;
-//         } else {
-//             throw error; // rethrow unexpected errors
-//         }
-//     }
-// }
 
 async function getRecipeDetails(user_id, recipe_id) {
   try {
@@ -313,7 +238,7 @@ async function addRecipe(recipe, user_id) {
 
 
 /**
- * Req #11: Return all recipes created by the user
+ Return all recipes created by the user
  */
 async function getUserRecipes(user_id) {
     const query = `SELECT recipe_id FROM user_recipes WHERE user_id = '${user_id}';`;
@@ -322,7 +247,7 @@ async function getUserRecipes(user_id) {
 }
 
 /**
- * Req #12: Return family recipes for the user
+ Return family recipes for the user
  */
 async function getFamilyRecipes(user_id) {
     const query = `SELECT f.recipe_id FROM family_recipes_info f JOIN user_recipes u ON f.recipe_id = u.recipe_id WHERE u.user_id = '${user_id}';`;
@@ -342,7 +267,7 @@ async function markAsWatched(user_id, recipe_id){
 }
 
 /**
- * Req #12: Create a new family recipe
+ * Create a new family recipe
  */
 async function createFamilyRecipe(recipe, user_id) {
   const {
@@ -434,72 +359,112 @@ async function doubleIngredients(recipeId, multiplier) {
 }
 
 /**
- * Bonus #14: Add recipe to the upcoming meal plan
- */
-async function addToMealPlan(userId, recipeId) {
-    // Add recipe to user's meal plan
-}
-
-/**
- * Bonus #14: Return the full meal plan
+ * Bonus #14: 
  */
 async function getMealPlan(userId) {
-    // Return list of recipes in meal plan
+  const query = `
+    SELECT recipe_id, order_index
+    FROM meal_plan
+    WHERE user_id = ${userId}
+    ORDER BY order_index ASC;
+  `;
+  return await DButils.execQuery(query);
 }
 
-/**
- * Bonus #14: Update the meal order (reordering)
- */
-async function updateMealOrder(userId, newOrderArray) {
-    // Update order of meal plan recipes
+async function addToMealPlan(userId, recipeId) {
+  const currentPlan = await getMealPlan(userId);
+  const exists = currentPlan.find(r => r.recipe_id == recipeId);
+  if (exists) return;
+
+  const nextIndex = currentPlan.length + 1;
+  await DButils.execQuery(`
+    INSERT INTO meal_plan (user_id, recipe_id, order_index)
+    VALUES (${userId}, '${recipeId}', ${nextIndex});
+  `);
 }
 
-/**
- * Bonus #14: Remove a recipe from the meal plan
- */
 async function removeFromMealPlan(userId, recipeId) {
-    // Remove recipe from meal plan
+  await DButils.execQuery(`
+    DELETE FROM meal_plan WHERE user_id = ${userId} AND recipe_id = '${recipeId}';
+  `);
 }
 
-/**
- * Bonus #14: Clear entire meal plan
- */
+async function reorderMealPlan(userId, newOrderArray) {
+  if (!newOrderArray || newOrderArray.length === 0) return;
+
+  // Build CASE WHEN SQL block
+  const cases = newOrderArray.map(({ recipeId, order }) => {
+    return `WHEN recipe_id = '${recipeId}' THEN ${order}`;
+  }).join("\n");
+
+  // Build recipe ID list for WHERE clause
+  const recipeIds = newOrderArray.map(({ recipeId }) => `'${recipeId}'`).join(", ");
+
+  const query = `
+    UPDATE meal_plan
+    SET order_index = CASE
+      ${cases}
+    END
+    WHERE user_id = ${userId} AND recipe_id IN (${recipeIds});
+  `;
+
+  await DButils.execQuery(query);
+}
+
+async function validateMealPlanOrder(userId, newOrderArray) {
+  if (!Array.isArray(newOrderArray) || newOrderArray.length === 0) {
+    throw new Error("Invalid input: newOrder must be a non-empty array");
+  }
+
+  // Check structure
+  for (const item of newOrderArray) {
+    if (
+      !item.recipeId ||
+      typeof item.recipeId !== "string" ||
+      typeof item.order !== "number" ||
+      item.order < 1
+    ) {
+      throw new Error("Invalid format: each item must have a valid recipeId and order >= 1");
+    }
+  }
+
+  // Check for duplicates in recipeId or order
+  const recipeIds = newOrderArray.map(i => i.recipeId);
+  const orders = newOrderArray.map(i => i.order);
+
+  const hasDuplicates = (arr) => new Set(arr).size !== arr.length;
+  if (hasDuplicates(recipeIds)) {
+    throw new Error("Duplicate recipeId detected in reorder list");
+  }
+  if (hasDuplicates(orders)) {
+    throw new Error("Duplicate order value detected");
+  }
+
+  // Check all recipeIds exist in user's meal plan
+  const currentPlan = await getMealPlan(userId); // returns [{ recipe_id, order_index }]
+  const currentIds = currentPlan.map(r => r.recipe_id);
+
+  const missingIds = recipeIds.filter(id => !currentIds.includes(id));
+  if (missingIds.length > 0) {
+    throw new Error(`Invalid recipeIds in reorder list: ${missingIds.join(", ")}`);
+  }
+
+  return true; // valid
+}
+
 async function clearMealPlan(userId) {
-    // Clear all meal plan entries
+  await DButils.execQuery(`
+    DELETE FROM meal_plan WHERE user_id = ${userId};
+  `);
 }
 
-/**
- * Bonus #14: Get meal progress (which steps are done)
- */
-async function getMealProgress(userId, recipeId) {
-    // Return progress array for recipe
-}
-
-/**
- * Bonus #14: Mark a specific step as done
- */
-async function setStepAsDone(userId, recipeId, stepIndex) {
-    // Mark step index as done in progress array
-}
-
-
-
-// exports.getRecipeDetails = getRecipeDetails;
-// exports.getThreeRandomRecipes = getThreeRandomRecipes;
-// exports.getRecipeDetailsByName = getRecipeDetailsByName;
-// exports.addRecipe = addRecipe;
 
 
 module.exports = {
     getThreeRandomRecipes,
-    // getThreeWatchedRecipes,
-    // markRecipeAsWatched,
-    // getRecipeDetailsByName,
     searchRecipesWithFilters,
     getRecipeDetails,
     addRecipe,
-    // getFavoriteRecipes,
-    // markRecipeAsFavorite,
     getUserRecipes,
     getFamilyRecipes,
     createFamilyRecipe,
@@ -507,11 +472,10 @@ module.exports = {
     doubleIngredients,
     addToMealPlan,
     getMealPlan,
-    updateMealOrder,
+    reorderMealPlan,
     removeFromMealPlan,
     clearMealPlan,
-    getMealProgress,
-    setStepAsDone,
     getRecipesPreview,
-    markAsWatched
+    markAsWatched,
+    validateMealPlanOrder
 };
