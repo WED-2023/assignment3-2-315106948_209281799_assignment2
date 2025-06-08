@@ -8,6 +8,7 @@ const recipe_utils = require("./utils/recipes_utils");
  * Authenticate all incoming requests by middleware
  */
 router.use(async function (req, res, next) {
+  console.log("SESSION DATA:", req.session); 
   console.log("Authenticating user...");
   if (req.session && req.session.user_id) {
     DButils.execQuery("SELECT user_id FROM users").then((users) => {
@@ -128,5 +129,29 @@ router.get('/familyRecipes', async (req, res, next) => {
     next(error);
   }
 });
+
+
+// Get the last three watched recipes for the current user
+router.get('/watched', async (req,res,next) => {
+  try{
+    const user_id = req.session.user_id;
+    // Get all watched recipe entries for the user
+    const watched_recipes = await user_utils.getThreeWatchedRecipes(user_id);
+
+    // Extract recipe IDs into a plain array
+    const recipes_id_array = watched_recipes.map(recipe => recipe.recipe_id);
+    
+    // If no favorites, return empty array early
+    if (recipes_id_array.length === 0) {
+      return res.status(200).send([]);
+    }
+
+    const results = await recipe_utils.getRecipesPreview(user_id, recipes_id_array);
+    res.status(200).send(results);
+  } catch(error){
+    next(error); 
+  }
+});
+
 
 module.exports = router;

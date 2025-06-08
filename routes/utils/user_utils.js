@@ -10,6 +10,20 @@ async function getFavoriteRecipes(user_id){
 }
 
 
+async function getThreeWatchedRecipes(user_id){
+        const query = `
+        SELECT recipe_id
+        FROM watched_recipes
+        WHERE user_id = '${user_id}'
+        ORDER BY watched_at DESC
+        LIMIT 3;
+    `;
+    const result = await DButils.execQuery(query);
+    return result;
+}
+
+
 
 exports.markAsFavorite = markAsFavorite;
 exports.getFavoriteRecipes = getFavoriteRecipes;
+exports.getThreeWatchedRecipes = getThreeWatchedRecipes;
