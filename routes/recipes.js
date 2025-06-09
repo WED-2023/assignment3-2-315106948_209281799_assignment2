@@ -54,6 +54,8 @@ router.get("/random", async (req, res, next) => {
  */
 router.get("/search", async (req, res, next) => {
   try {
+    const { query, number, cuisine, diet, intolerances } = req.query;
+    const filters = { cuisine, diet, intolerances };
     if (!query || query.trim().length < 2) {
       return res.status(400).send("Invalid or missing search query.");
     }
@@ -62,10 +64,8 @@ router.get("/search", async (req, res, next) => {
       return res.status(400).send("Invalid 'number' parameter. Must be 1-100.");
     }
 
-
-    const { query, number, cuisine, diet, intolerances } = req.query;
-    const filters = { cuisine, diet, intolerances };
     const results = await recipes_utils.searchRecipesWithFilters(req.user_id, query, number, filters);
+
     // Save the results in the session
     if (req.session)
       req.session.lastSearchResults = results;
@@ -199,6 +199,9 @@ router.get("/:recipeId", async (req, res, next) => {
       return res.status(400).send("Recipe ID is required.");
     }
     const recipe = await recipes_utils.getRecipeDetails(req.user_id, req.params.recipeId);
+    if (!recipe) {
+      return res.status(404).send("Recipe not found.");
+    }
     // if there is a user_id in the session, mark the recipe as watched   
     if (req.user_id) {
       await recipes_utils.markAsWatched(req.user_id, req.params.recipeId);
