@@ -1,3 +1,4 @@
+// user.js — routes for user-related recipe operations
 var express = require("express");
 var router = express.Router();
 const DButils = require("./utils/DButils");
@@ -5,56 +6,70 @@ const user_utils = require("./utils/user_utils");
 const recipe_utils = require("./utils/recipes_utils");
 
 /**
- * Authenticate all incoming requests by middleware
+ * Middleware: Authenticate all requests
+ * - Logs session data
+ * - Verifies session.user_id exists in users table
+ * - Attaches req.user_id on success or returns 401 Unauthorized
  */
 router.use(async function (req, res, next) {
-  console.log("SESSION DATA:", req.session); 
-  console.log("Authenticating user...");
   if (req.session && req.session.user_id) {
+    // Check if user_id exists in the database
     DButils.execQuery("SELECT user_id FROM users").then((users) => {
       if (users.find((x) => x.user_id === req.session.user_id)) {
+        // User found: attach to request and continue
         req.user_id = req.session.user_id;
         console.log("User authenticated: " + req.user_id);
         next();
       }
     }).catch(err => next(err));
   } else {
+    // No session or no user_id: unauthorized
     res.sendStatus(401);
   }
 });
 
 
 /**
- * This path gets body with recipeId and save this recipe in the favorites list of the logged-in user
+ * POST /favorites
+ * - Saves a recipe as a favorite for the logged-in user
+ * - Validates recipeId in body
+ * - Prevents duplicates
+ * - Verifies existence in Spoonacular or user-created recipes
  */
 router.post('/favorites', async (req,res,next) => {
-  console.log("Saving recipe as favorite");
   try{
     const user_id = req.session.user_id;
     const recipe_id = req.body.recipeId;
+
     // Validate that recipe_id is provided
     if (!recipe_id) {
       return res.status(400).send("Recipe ID is required");
     }
+
     // Check if the recipe already exists in favorites
     const existingFavorites = await user_utils.getFavoriteRecipes(user_id);
     if (existingFavorites.some(fav => fav.recipe_id === recipe_id)) {
       return res.status(200).send("Recipe is already in favorites");
     }
-    // check if the recipe exists in the spoonacular api
-    const recipeExists = await recipe_utils.getRecipeDetails(recipe_id);
+
+    // check if the recipe exists
+    const recipeExists = await recipe_utils.getRecipeDetails(user_id, recipe_id);
     if (!recipeExists) {
       return res.status(404).send("Recipe not found");
+
     }
     await user_utils.markAsFavorite(user_id,recipe_id);
     res.status(200).send("The Recipe successfully saved as favorite");
+
     } catch(error){
-    next(error);
-  }
+      next(error);
+    }
 })
 
 /**
- * This path returns the favorites recipes that were saved by the logged-in user
+ * GET /favorites
+ * - Retrieves all favorite recipes for the logged-in user
+ * - Returns an array of recipe preview objects
  */
 router.get('/favorites', async (req,res,next) => {
   try{
@@ -70,35 +85,50 @@ router.get('/favorites', async (req,res,next) => {
       return res.status(200).send([]);
     }
 
-    const results = await recipe_utils.getRecipesPreview(recipes_id_array);
+    const results = await recipe_utils.getRecipesPreview(user_id, recipes_id_array);
     res.status(200).send(results);
   } catch(error){
-    next(error); 
-  }
+      next(error); 
+    }
 });
 
-
-// add a new recipes to the database (My recipes for the user)
+/**
+ * POST /myRecipes
+ * - Saves a new user-created recipe
+ * - Requires only id and title (via validateRecipeData)
+ * - Optionally persists ingredients and steps if provided
+ */
 router.post('/myRecipes', async (req, res, next) => {
   try {
     const user_id = req.session.user_id;
     const recipe = req.body;
-    if (!recipe || !recipe.id || !recipe.title || !recipe.readyInMinutes || !recipe.image || !recipe.popularity || recipe.vegan === undefined || recipe.vegetarian === undefined || recipe.glutenFree === undefined) {
-      return res.status(400).send("Invalid recipe data");
-    }
+
+    // throws if any preview field missing
+    recipe_utils.validateRecipeData(recipe);
+
+    // will save ingredients/steps only if provided
     const newRecipe = await recipe_utils.addRecipe(recipe, user_id);
     res.status(201).send(newRecipe);
+
   } catch (error) {
+    // input errors → 400; database or other → next(error)
+    if (error.message.startsWith("Missing required")) {
+      return res.status(400).send(error.message);
+    }
     next(error);
   }
 });
 
-// get all recipes created by the user
+/**
+ * GET /myRecipes
+ * - Returns an array of recipe preview objects
+ */
 router.get('/myRecipes', async (req, res, next) => {
   try {
     const user_id = req.session.user_id;
-    const recipes = await recipe_utils.getUserRecipes(user_id);
-    res.status(200).send(recipes);
+    const recipes_id_array = await recipe_utils.getUserRecipes(user_id);  // returns only the ids
+    const results = await recipe_utils.getRecipesPreview(user_id, recipes_id_array);
+    res.status(200).send(results);
   } catch (error) {
     next(error);
   }
@@ -109,7 +139,7 @@ router.post('/familyRecipes', async (req, res, next) => {
   try {
     const user_id = req.session.user_id;
     const recipe = req.body;
-    if (!recipe || !recipe.id || !recipe.origin_person || !recipe.occasion || !recipe.story) {
+    if (!recipe || !recipe.id || !recipe.title || !recipe.origin_person || !recipe.occasion || !recipe.story) {
       return res.status(400).send("Invalid recipe data");
     }
     const newRecipe = await recipe_utils.createFamilyRecipe(recipe, user_id);
@@ -123,8 +153,10 @@ router.post('/familyRecipes', async (req, res, next) => {
 router.get('/familyRecipes', async (req, res, next) => {
   try {
     const user_id = req.session.user_id;
-    const familyRecipes = await recipe_utils.getFamilyRecipes(user_id);
-    res.status(200).send(familyRecipes);
+    const family_recipes_id_array = await recipe_utils.getFamilyRecipes(user_id);
+    const results = await recipe_utils.getRecipesPreview(user_id, family_recipes_id_array);
+
+    res.status(200).send(results);
   } catch (error) {
     next(error);
   }

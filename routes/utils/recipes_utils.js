@@ -134,10 +134,15 @@ async function searchRecipesWithFilters(user_id, recipe_name, number = 5, filter
     return await getRecipesPreview(user_id, ids);
 }
 
-
+/**
+ * Fetch full recipe details:
+ *  1) Try Spoonacular API
+ *  2) If 404 *and* user_id is provided, fall back to local DB’s user-created recipes
+ */
 async function getRecipeDetails(user_id, recipe_id) {
   try {
-    const recipe_info = await getRecipeInformation(recipe_id); // axios call
+    // 1) Fetch from Spoonacular
+    const recipe_info = await getRecipeInformation(recipe_id);
 
     const {
       id,
@@ -149,42 +154,100 @@ async function getRecipeDetails(user_id, recipe_id) {
       vegetarian,
       glutenFree,
       servings,
-      instructions,
+      instructions: fullInstructions,
       extendedIngredients
     } = recipe_info.data;
 
+    // Map ingredients array
     const ingredients = extendedIngredients.map(ing => ({
-      id: ing.id,
-      name: ing.name,
-      amount: ing.amount,
-      unit: ing.unit,
+      id:       ing.id,
+      name:     ing.name,
+      amount:   ing.amount,
+      unit:     ing.unit,
       original: ing.original,
-      image: `https://spoonacular.com/cdn/ingredients_100x100/${ing.image}`
+      image:    `https://spoonacular.com/cdn/ingredients_100x100/${ing.image}`
     }));
 
-    const recipe = {
+    // Build full recipe object
+    let recipe = {
       id,
       title,
       readyInMinutes,
       image,
-      popularity: aggregateLikes,
+      popularity:     aggregateLikes,
       vegan,
       vegetarian,
       glutenFree,
       servings,
-      instructions,
+      instructions:   fullInstructions,
       ingredients
     };
 
-    const enrichedRecipe = await addUserSessionInfo(user_id, recipe);
-    return enrichedRecipe;
+    // Enrich with watched/favorite/family flags
+    recipe = await addUserSessionInfo(user_id, recipe);
+    return recipe;
+
   } catch (error) {
-    if (error.response?.status === 404) {
-      console.warn(`Recipe with ID ${recipe_id} not found.`);
-      return null;
-    } else {
-      throw error;
+    // 2) On 404, attempt local DB fallback
+    if (error.response?.status === 404 && user_id) {
+      // Check user-created recipes table
+      const rows = await DButils.execQuery(
+        `SELECT * FROM recipes WHERE id='${recipe_id}'`
+      );
+      if (rows.length === 0) return null;
+
+      const row = rows[0];
+      // Load persisted ingredients (if any)
+      const ingRows = await DButils.execQuery(
+        `SELECT ingredient_id AS id, name, amount, unit, original, image
+           FROM ingredients
+          WHERE recipe_id='${recipe_id}'
+          ORDER BY ingredient_id`
+      );
+      const ingredients = ingRows.map(r => ({
+        id:       r.id,
+        name:     r.name,
+        amount:   r.amount,
+        unit:     r.unit,
+        original: r.original,
+        image:    r.image
+      }));
+
+      // Load persisted steps (if any)
+      const stepRows = await DButils.execQuery(
+        `SELECT step_index, instruction
+           FROM instructions
+          WHERE recipe_id='${recipe_id}'
+          ORDER BY step_index`
+      );
+      const steps = stepRows.map(r => ({
+        number: r.step_index,
+        step:   r.instruction
+      }));
+
+      // Build full local recipe object
+      let recipe = {
+        id:             row.id,
+        title:          row.title,
+        readyInMinutes: row.readyInMinutes,
+        image:          row.image,
+        popularity:     row.popularity,
+        vegan:          !!row.vegan,
+        vegetarian:     !!row.vegetarian,
+        glutenFree:     !!row.glutenFree,
+        servings:       row.servings,
+        instructions:   row.instructions,  // if you store a text blob
+        ingredients,                          // from ingredients table
+        steps                                 // from instructions table
+      };
+
+      // Enrich with watched/favorite/family flags
+      recipe = await addUserSessionInfo(user_id, recipe);
+      return recipe;
     }
+
+    // Re-throw other errors
+    throw error;
   }
 }
 
@@ -198,42 +261,161 @@ async function getRecipeInformation(recipe_id) {
     });
 }
 
+/**
+ * — HELPER: validate that we at least have all preview fields —
+ * Only these are required; ingredients/steps are optional.
+ */
+function validateRecipeData(recipe) {
+  const required = [
+    'id', 'title'
+  ];
+  for (const f of required) {
+    if (recipe[f] === undefined || recipe[f] === null) {
+      throw new Error(`Missing required field: ${f}`);
+    }
+  }
+}
+
+function escapeSQL(val) {
+  if (typeof val !== "string") return val;
+  return val.replace(/'/g, "''");
+}
 
 /**
- * Req #9: Add a new recipe created by user
+ * Insert or update a recipe + its optional ingredients & steps, and link it to the user.
  */
 async function addRecipe(recipe, user_id) {
+  // 1) ensure preview fields
+  validateRecipeData(recipe);
   const {
     id,
     title,
-    image,
-    readyInMinutes,
-    popularity,
-    vegan,
-    vegetarian,
-    glutenFree
+    image          = null,
+    readyInMinutes = null,
+    servings       = null,
+    popularity     = 0,
+    vegan          = false,
+    vegetarian     = false,
+    glutenFree     = false
   } = recipe;
 
+  // 2) upsert into recipes
+  // escape any apostrophes
+  const safeId     = escapeSQL(id);
+  const safeTitle  = escapeSQL(title);
+  const safeImage  = image ? escapeSQL(image) : null;
+
   const recipeQuery = `
-    INSERT INTO recipes (
-      id, title, image, readyInMinutes, popularity,
-      vegan, vegetarian, glutenFree
-    )
-    VALUES (
-      '${id}', '${title}', '${image}', ${readyInMinutes}, ${popularity},
-      ${vegan}, ${vegetarian}, ${glutenFree}
-    );
+    INSERT INTO recipes
+      (id, title, image, readyInMinutes, servings, popularity,
+       vegan, vegetarian, glutenFree)
+    VALUES
+      ('${safeId}', '${safeTitle}',
+       ${safeImage  ? `'${safeImage}'`  : 'NULL'},
+       ${readyInMinutes}, ${servings},
+       ${popularity}, ${vegan}, ${vegetarian}, ${glutenFree}
+      )
+    ON DUPLICATE KEY UPDATE
+      title          = VALUES(title),
+      image          = VALUES(image),
+      readyInMinutes = VALUES(readyInMinutes),
+      servings       = VALUES(servings),
+      popularity     = VALUES(popularity),
+      vegan          = VALUES(vegan),
+      vegetarian     = VALUES(vegetarian),
+      glutenFree     = VALUES(glutenFree);
   `;
-
-  const userRecipeQuery = `
-    INSERT INTO user_recipes (user_id, recipe_id)
-    VALUES (${user_id}, '${id}');
-  `;
-
   await DButils.execQuery(recipeQuery);
-  await DButils.execQuery(userRecipeQuery);
+
+  // 3) upsert ingredients if provided
+  if (Array.isArray(recipe.ingredients)) {
+    // clear old
+    await DButils.execQuery(`DELETE FROM ingredients WHERE recipe_id='${id}';`);
+    // insert new batch
+    for (const ing of recipe.ingredients) {
+      const {
+        id: ingId = null,
+        name,
+        amount,
+        unit = '',
+        original = null,
+        image: ingImage = null
+      } = ing;
+      const q = `
+        INSERT INTO ingredients
+          (recipe_id, ingredient_id, name, amount, unit, original, image)
+        VALUES
+          ('${id}', ${ingId}, '${name}', ${amount},
+           '${unit}', ${original ? `'${original}'` : 'NULL'},
+           ${ingImage  ? `'${ingImage}'`  : 'NULL'});
+      `;
+      await DButils.execQuery(q);
+    }
+  }
+
+  // 4) upsert steps if provided
+  if (Array.isArray(recipe.steps)) {
+    await DButils.execQuery(`DELETE FROM instructions WHERE recipe_id='${id}';`);
+    for (let idx = 0; idx < recipe.steps.length; idx++) {
+      const stepObj = recipe.steps[idx];
+      const text = stepObj.step ?? stepObj.instruction ?? '';
+      const q = `
+        INSERT INTO instructions
+          (recipe_id, step_index, instruction)
+        VALUES
+          ('${id}', ${idx + 1}, '${text}');
+      `;
+      await DButils.execQuery(q);
+    }
+  }
+
+  // 5) link to user_recipes (no-op if already exists)
+  const linkQ = `
+    INSERT INTO user_recipes (user_id, recipe_id)
+    VALUES (${user_id}, '${id}')
+    ON DUPLICATE KEY UPDATE recipe_id = recipe_id;
+  `;
+  await DButils.execQuery(linkQ);
+
   return recipe;
 }
+
+
+// /**
+//  * Req #9: Add a new recipe created by user
+//  */
+// async function addRecipe(recipe, user_id) {
+//   const {
+//     id,
+//     title,
+//     image,
+//     readyInMinutes,
+//     popularity,
+//     vegan,
+//     vegetarian,
+//     glutenFree
+//   } = recipe;
+
+//   const recipeQuery = `
+//     INSERT INTO recipes (
+//       id, title, image, readyInMinutes, popularity,
+//       vegan, vegetarian, glutenFree
+//     )
+//     VALUES (
+//       '${id}', '${title}', '${image}', ${readyInMinutes}, ${popularity},
+//       ${vegan}, ${vegetarian}, ${glutenFree}
+//     );
+//   `;
+
+//   const userRecipeQuery = `
+//     INSERT INTO user_recipes (user_id, recipe_id)
+//     VALUES (${user_id}, '${id}');
+//   `;
+
+//   await DButils.execQuery(recipeQuery);
+//   await DButils.execQuery(userRecipeQuery);
+//   return recipe;
+// }
 
 
 
@@ -312,18 +494,39 @@ async function createFamilyRecipe(recipe, user_id) {
 
 
 /**
- * Return preview details for multiple recipes
- * @param {Array<string>} recipe_id_array - Array of recipe IDs
- * @returns {Array<Object>} - Array of recipe preview objects
+ * Return preview details for multiple recipes.
+ * Only the “preview” fields are returned:
+ *   id, title, readyInMinutes, image, popularity,
+ *   vegan, vegetarian, glutenFree,
+ *   watched, favorite, family
+ *
+ * @param {string|null} user_id
+ * @param {string[]} recipe_id_array
+ * @returns {Promise<Object[]>}
  */
 async function getRecipesPreview(user_id, recipe_id_array) {
-    const previewPromises = recipe_id_array.map(id => getRecipeDetails(user_id, id));
-    const previews = await Promise.all(previewPromises);
+  // 1. Fetch full details (with flags) for each ID
+  const detailed = await Promise.all(
+    recipe_id_array.map(id => getRecipeDetails(user_id, id))
+  );
 
-    // Filter out any nulls (e.g. 404 or failed fetch)
-    return previews.filter(recipe => recipe !== null);
+  // 2. Filter out any nulls (not found) and pluck only the preview fields
+  return detailed
+    .filter(r => r !== null)
+    .map(r => ({
+      id:             r.id,
+      title:          r.title,
+      readyInMinutes: r.readyInMinutes,
+      image:          r.image,
+      popularity:     r.popularity,
+      vegan:          r.vegan,
+      vegetarian:     r.vegetarian,
+      glutenFree:     r.glutenFree,
+      watched:        r.watched,
+      favorite:       r.favorite,
+      family:         r.family
+    }));
 }
-
 
 /**
  * Bonus #13: Get preparation steps for a recipe
@@ -477,5 +680,6 @@ module.exports = {
     clearMealPlan,
     getRecipesPreview,
     markAsWatched,
-    validateMealPlanOrder
+    validateMealPlanOrder,
+    validateRecipeData
 };
