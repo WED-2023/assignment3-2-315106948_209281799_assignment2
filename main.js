@@ -5,8 +5,13 @@ var path = require("path");
 var logger = require("morgan");
 const session = require("client-sessions");
 const DButils = require("./routes/utils/DButils");
+const cors = require("cors");
 
 var app = express();
+app.use(cors({
+  origin: "http://localhost:80", 
+  credentials: true
+}));
 app.use(logger("dev")); //logger
 app.use(express.json()); // parse application/json
 app.use(
