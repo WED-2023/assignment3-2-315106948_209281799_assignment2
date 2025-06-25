@@ -9,7 +9,7 @@ const cors = require("cors");
 
 var app = express();
 app.use(cors({
-  origin: "http://localhost:80", 
+  origin: ["http://localhost:80", "http://localhost:8082", "http://localhost:8080"],
   credentials: true
 }));
 app.use(logger("dev")); //logger
@@ -40,7 +40,8 @@ app.get("/",function(req,res)
 });
 
 
-var port = process.env.PORT || "80"; //local=3000 remote=80
+// var port = process.env.PORT || "3000"; //local=3000 remote=80
+var port = "3000"
 //#endregion
 const user = require("./routes/user");
 const recipes = require("./routes/recipes");
