@@ -668,28 +668,68 @@ async function getRecipesPreview(user_id, recipe_id_array) {
 /**
  * Bonus #13: Get preparation steps for a recipe
  */
+/**
+ * Bonus #13: Get preparation steps for a recipe
+ *  - First tries Spoonacular
+ *  - If no steps or an error, falls back to local DB’s instructions table
+ */
 async function getPreparationSteps(recipeId) {
+  // 1) Try Spoonacular
   try {
     const response = await axios.get(
       `${api_domain}/${recipeId}/analyzedInstructions`,
       {
-        params: {
-          apiKey: process.env.spooncular_apiKey
-        }
+        params: { apiKey: process.env.spooncular_apiKey }
       }
     );
-
     const instructions = response.data;
-
-    if (!instructions || instructions.length === 0 || !instructions[0].steps) {
-      throw new Error("No preparation steps found for this recipe.");
+    if (instructions?.length > 0 && instructions[0].steps?.length > 0) {
+      return instructions[0].steps; // { number, step, ingredients, equipment }
     }
-
-    return instructions[0].steps; // Array of { number, step, ingredients, equipment }
-  } catch (error) {
-    throw new Error("Failed to fetch preparation steps: " + error.message);
+    // otherwise, fall through
+  } catch (e) {
+    console.warn(`Spoonacular steps failed for ${recipeId}:`, e.message);
   }
+
+  // 2) Fallback: load from local instructions table
+  //    (we must inline the recipeId since execQuery doesn't bind placeholders)
+  const safeId = recipeId.replace(/'/g, "''");
+  const rows = await DButils.execQuery(`
+    SELECT step_index, instruction
+      FROM instructions
+     WHERE recipe_id = '${safeId}'
+     ORDER BY step_index;
+  `);
+
+  return rows.map(r => ({
+    number:      r.step_index,
+    step:        r.instruction,
+    ingredients: [],  // leave empty
+    equipment:   []   // leave empty
+  }));
 }
+// async function getPreparationSteps(recipeId) {
+//   try {
+//     const response = await axios.get(
+//       `${api_domain}/${recipeId}/analyzedInstructions`,
+//       {
+//         params: {
+//           apiKey: process.env.spooncular_apiKey
+//         }
+//       }
+//     );
+
+//     const instructions = response.data;
+
+//     if (!instructions || instructions.length === 0 || !instructions[0].steps) {
+//       throw new Error("No preparation steps found for this recipe.");
+//     }
+
+//     return instructions[0].steps; // Array of { number, step, ingredients, equipment }
+//   } catch (error) {
+//     throw new Error("Failed to fetch preparation steps: " + error.message);
+//   }
+// }
 
 /**
  * Bonus #13: Multiply ingredients based on servings
