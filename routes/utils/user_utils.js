@@ -1,7 +1,15 @@
 const DButils = require("./DButils");
 
-async function markAsFavorite(user_id, recipe_id){
-    await DButils.execQuery(`insert into favorite_recipes values ('${user_id}',${recipe_id})`);
+const escape = s => String(s).replace(/'/g, "''");
+
+async function markAsFavorite(user_id, recipe_id) {
+  const safeRecipe = escape(recipe_id);
+  // user_id is numeric so no need to escape, but you can if it's a string:
+  const query = `
+    INSERT INTO favorite_recipes (user_id, recipe_id)
+    VALUES (${user_id}, '${safeRecipe}');
+  `;
+  await DButils.execQuery(query);
 }
 
 async function getFavoriteRecipes(user_id){

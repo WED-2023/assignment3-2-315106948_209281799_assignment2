@@ -284,102 +284,239 @@ function escapeSQL(val) {
 /**
  * Insert or update a recipe + its optional ingredients & steps, and link it to the user.
  */
+// OLD:
+// async function addRecipe(recipe, user_id) {
+//   // 1) ensure preview fields
+//   validateRecipeData(recipe);
+//   const {
+//     id,
+//     title,
+//     image          = null,
+//     readyInMinutes = null,
+//     servings       = null,
+//     popularity     = 0,
+//     vegan          = false,
+//     vegetarian     = false,
+//     glutenFree     = false
+//   } = recipe;
+
+//   // 2) upsert into recipes
+//   // escape any apostrophes
+//   const safeId     = escapeSQL(id);
+//   const safeTitle  = escapeSQL(title);
+//   const safeImage  = image ? escapeSQL(image) : null;
+
+//   const recipeQuery = `
+//     INSERT INTO recipes
+//       (id, title, image, readyInMinutes, servings, popularity,
+//        vegan, vegetarian, glutenFree)
+//     VALUES
+//       ('${safeId}', '${safeTitle}',
+//        ${safeImage  ? `'${safeImage}'`  : 'NULL'},
+//        ${readyInMinutes}, ${servings},
+//        ${popularity}, ${vegan}, ${vegetarian}, ${glutenFree}
+//       )
+//     ON DUPLICATE KEY UPDATE
+//       title          = VALUES(title),
+//       image          = VALUES(image),
+//       readyInMinutes = VALUES(readyInMinutes),
+//       servings       = VALUES(servings),
+//       popularity     = VALUES(popularity),
+//       vegan          = VALUES(vegan),
+//       vegetarian     = VALUES(vegetarian),
+//       glutenFree     = VALUES(glutenFree);
+//   `;
+//   await DButils.execQuery(recipeQuery);
+
+//   // 3) upsert ingredients if provided
+//   if (Array.isArray(recipe.ingredients)) {
+//     // clear old
+//     await DButils.execQuery(`DELETE FROM ingredients WHERE recipe_id='${id}';`);
+//     // insert new batch
+//     for (const ing of recipe.ingredients) {
+//       const {
+//         id: ingId = null,
+//         name,
+//         amount,
+//         unit = '',
+//         original = null,
+//         image: ingImage = null
+//       } = ing;
+//       const q = `
+//         INSERT INTO ingredients
+//           (recipe_id, ingredient_id, name, amount, unit, original, image)
+//         VALUES
+//           ('${id}', ${ingId}, '${name}', ${amount},
+//            '${unit}', ${original ? `'${original}'` : 'NULL'},
+//            ${ingImage  ? `'${ingImage}'`  : 'NULL'});
+//       `;
+//       await DButils.execQuery(q);
+//     }
+//   }
+
+//   // 4) upsert steps if provided
+//   if (Array.isArray(recipe.steps)) {
+//     await DButils.execQuery(`DELETE FROM instructions WHERE recipe_id='${id}';`);
+//     for (let idx = 0; idx < recipe.steps.length; idx++) {
+//       const stepObj = recipe.steps[idx];
+//       const text = stepObj.step ?? stepObj.instruction ?? '';
+//       const q = `
+//         INSERT INTO instructions
+//           (recipe_id, step_index, instruction)
+//         VALUES
+//           ('${id}', ${idx + 1}, '${text}');
+//       `;
+//       await DButils.execQuery(q);
+//     }
+//   }
+
+//   // 5) link to user_recipes (no-op if already exists)
+//   const linkQ = `
+//     INSERT INTO user_recipes (user_id, recipe_id)
+//     VALUES (${user_id}, '${id}')
+//     ON DUPLICATE KEY UPDATE recipe_id = recipe_id;
+//   `;
+//   await DButils.execQuery(linkQ);
+
+//   return recipe;
+// }
+// NEW: more fields
+/**
+ * Insert or update a recipe (all columns) + ingredients, steps, and link to user
+ */
 async function addRecipe(recipe, user_id) {
   // 1) ensure preview fields
   validateRecipeData(recipe);
+
   const {
     id,
     title,
-    image          = null,
-    readyInMinutes = null,
-    servings       = null,
-    popularity     = 0,
-    vegan          = false,
-    vegetarian     = false,
-    glutenFree     = false
+    image                     = null,
+    readyInMinutes            = null,
+    servings                  = null,
+    popularity                = 0,
+    vegan                     = false,
+    vegetarian                = false,
+    glutenFree                = false,
+    dairyFree                 = false,
+    veryHealthy               = false,
+    cheap                     = false,
+    veryPopular               = false,
+    sustainable               = false,
+    lowFodmap                 = false,
+    weightWatcherSmartPoints  = null,
+    gaps                      = null,
+    healthScore               = null,
+    pricePerServing           = null,
+    sourceUrl                 = null,
+    spoonacularSourceUrl      = null,
+    sourceName                = null,
+    license                   = null,
+    summary                   = null,
+    instructions              = null,
+    ingredients,
+    steps
   } = recipe;
 
-  // 2) upsert into recipes
-  // escape any apostrophes
-  const safeId     = escapeSQL(id);
-  const safeTitle  = escapeSQL(title);
-  const safeImage  = image ? escapeSQL(image) : null;
+  // helper to quote or NULL‐ify
+  const safe = v => v === null ? 'NULL' : `'${escapeSQL(v)}'`;
 
+  // 2) upsert into recipes (all your columns)
   const recipeQuery = `
     INSERT INTO recipes
       (id, title, image, readyInMinutes, servings, popularity,
-       vegan, vegetarian, glutenFree)
+       vegan, vegetarian, glutenFree, dairyFree, veryHealthy,
+       cheap, veryPopular, sustainable, lowFodmap,
+       weightWatcherSmartPoints, gaps, healthScore,
+       pricePerServing, sourceUrl, spoonacularSourceUrl,
+       sourceName, license, summary, instructions)
     VALUES
-      ('${safeId}', '${safeTitle}',
-       ${safeImage  ? `'${safeImage}'`  : 'NULL'},
-       ${readyInMinutes}, ${servings},
-       ${popularity}, ${vegan}, ${vegetarian}, ${glutenFree}
-      )
+      ('${escapeSQL(id)}', '${escapeSQL(title)}',
+       ${safe(image)}, ${readyInMinutes}, ${servings}, ${popularity},
+       ${vegan}, ${vegetarian}, ${glutenFree}, ${dairyFree},
+       ${veryHealthy}, ${cheap}, ${veryPopular}, ${sustainable},
+       ${lowFodmap}, ${weightWatcherSmartPoints}, ${safe(gaps)},
+       ${healthScore}, ${pricePerServing}, ${safe(sourceUrl)},
+       ${safe(spoonacularSourceUrl)}, ${safe(sourceName)},
+       ${safe(license)}, ${safe(summary)}, ${safe(instructions)})
     ON DUPLICATE KEY UPDATE
-      title          = VALUES(title),
-      image          = VALUES(image),
-      readyInMinutes = VALUES(readyInMinutes),
-      servings       = VALUES(servings),
-      popularity     = VALUES(popularity),
-      vegan          = VALUES(vegan),
-      vegetarian     = VALUES(vegetarian),
-      glutenFree     = VALUES(glutenFree);
+      title                    = VALUES(title),
+      image                    = VALUES(image),
+      readyInMinutes           = VALUES(readyInMinutes),
+      servings                 = VALUES(servings),
+      popularity               = VALUES(popularity),
+      vegan                    = VALUES(vegan),
+      vegetarian               = VALUES(vegetarian),
+      glutenFree               = VALUES(glutenFree),
+      dairyFree                = VALUES(dairyFree),
+      veryHealthy              = VALUES(veryHealthy),
+      cheap                    = VALUES(cheap),
+      veryPopular              = VALUES(veryPopular),
+      sustainable              = VALUES(sustainable),
+      lowFodmap                = VALUES(lowFodmap),
+      weightWatcherSmartPoints = VALUES(weightWatcherSmartPoints),
+      gaps                     = VALUES(gaps),
+      healthScore              = VALUES(healthScore),
+      pricePerServing          = VALUES(pricePerServing),
+      sourceUrl                = VALUES(sourceUrl),
+      spoonacularSourceUrl     = VALUES(spoonacularSourceUrl),
+      sourceName               = VALUES(sourceName),
+      license                  = VALUES(license),
+      summary                  = VALUES(summary),
+      instructions             = VALUES(instructions);
   `;
   await DButils.execQuery(recipeQuery);
 
   // 3) upsert ingredients if provided
-  if (Array.isArray(recipe.ingredients)) {
-    // clear old
-    await DButils.execQuery(`DELETE FROM ingredients WHERE recipe_id='${id}';`);
-    // insert new batch
-    for (const ing of recipe.ingredients) {
+  if (Array.isArray(ingredients)) {
+    await DButils.execQuery(`DELETE FROM ingredients WHERE recipe_id='${escapeSQL(id)}';`);
+    for (const ing of ingredients) {
       const {
-        id: ingId = null,
+        id: ingId     = null,
         name,
         amount,
-        unit = '',
-        original = null,
-        image: ingImage = null
+        unit          = '',
+        original      = null,
+        image: img    = null
       } = ing;
       const q = `
         INSERT INTO ingredients
           (recipe_id, ingredient_id, name, amount, unit, original, image)
         VALUES
-          ('${id}', ${ingId}, '${name}', ${amount},
-           '${unit}', ${original ? `'${original}'` : 'NULL'},
-           ${ingImage  ? `'${ingImage}'`  : 'NULL'});
+          ('${escapeSQL(id)}', ${ingId}, '${escapeSQL(name)}',
+           ${amount}, '${escapeSQL(unit)}',
+           ${original? `'${escapeSQL(original)}'` : 'NULL'},
+           ${img?      `'${escapeSQL(img)}'`      : 'NULL'});
       `;
       await DButils.execQuery(q);
     }
   }
 
   // 4) upsert steps if provided
-  if (Array.isArray(recipe.steps)) {
-    await DButils.execQuery(`DELETE FROM instructions WHERE recipe_id='${id}';`);
-    for (let idx = 0; idx < recipe.steps.length; idx++) {
-      const stepObj = recipe.steps[idx];
-      const text = stepObj.step ?? stepObj.instruction ?? '';
+  if (Array.isArray(steps)) {
+    await DButils.execQuery(`DELETE FROM instructions WHERE recipe_id='${escapeSQL(id)}';`);
+    for (let idx = 0; idx < steps.length; idx++) {
+      const text = steps[idx].step ?? steps[idx].instruction ?? '';
       const q = `
         INSERT INTO instructions
           (recipe_id, step_index, instruction)
         VALUES
-          ('${id}', ${idx + 1}, '${text}');
+          ('${escapeSQL(id)}', ${idx+1}, '${escapeSQL(text)}');
       `;
       await DButils.execQuery(q);
     }
   }
 
-  // 5) link to user_recipes (no-op if already exists)
+  // 5) link to user_recipes (now inlined—no ? placeholders)
   const linkQ = `
     INSERT INTO user_recipes (user_id, recipe_id)
-    VALUES (${user_id}, '${id}')
+    VALUES (${user_id}, '${escapeSQL(id)}')
     ON DUPLICATE KEY UPDATE recipe_id = recipe_id;
   `;
   await DButils.execQuery(linkQ);
 
   return recipe;
 }
-
 
 // /**
 //  * Req #9: Add a new recipe created by user

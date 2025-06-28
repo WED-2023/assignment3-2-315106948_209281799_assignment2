@@ -4,6 +4,7 @@ var router = express.Router();
 const DButils = require("./utils/DButils");
 const user_utils = require("./utils/user_utils");
 const recipe_utils = require("./utils/recipes_utils");
+const { v4: uuidv4 } = require('uuid');
 
 /**
  * Middleware: Authenticate all requests
@@ -98,20 +99,48 @@ router.get('/favorites', async (req,res,next) => {
  * - Requires only id and title (via validateRecipeData)
  * - Optionally persists ingredients and steps if provided
  */
+// OLD: get recipe id from client
+// router.post('/myRecipes', async (req, res, next) => {
+//   try {
+//     const user_id = req.session.user_id;
+//     const recipe = req.body;
+
+//     // throws if any preview field missing
+//     recipe_utils.validateRecipeData(recipe);
+
+//     // will save ingredients/steps only if provided
+//     const newRecipe = await recipe_utils.addRecipe(recipe, user_id);
+//     res.status(201).send(newRecipe);
+
+//   } catch (error) {
+//     // input errors → 400; database or other → next(error)
+//     if (error.message.startsWith("Missing required")) {
+//       return res.status(400).send(error.message);
+//     }
+//     next(error);
+//   }
+// });
+// New: generate a new id for the recipe
 router.post('/myRecipes', async (req, res, next) => {
   try {
     const user_id = req.session.user_id;
-    const recipe = req.body;
+    // Grab all fields except id from the client
+    const recipe = { ...req.body };
 
-    // throws if any preview field missing
+    // 1) Generate the ID on the server
+    recipe.id = uuidv4();
+
+    // 2) Validate your preview fields (title, image, etc.)
+    //    Make sure your validateRecipeData no longer expects recipe.id from the client.
     recipe_utils.validateRecipeData(recipe);
 
-    // will save ingredients/steps only if provided
+    // 3) Persist recipe (ingredients + steps if present)
     const newRecipe = await recipe_utils.addRecipe(recipe, user_id);
-    res.status(201).send(newRecipe);
 
-  } catch (error) {
-    // input errors → 400; database or other → next(error)
+    // 4) Return the newly created recipe (including its server-generated ID)
+    res.status(201).send(newRecipe);
+  }
+  catch (error) {
     if (error.message.startsWith("Missing required")) {
       return res.status(400).send(error.message);
     }
@@ -135,16 +164,43 @@ router.get('/myRecipes', async (req, res, next) => {
 });
 
 // post a recipe as family recipe
+// OLD: get recipe id from client
+// router.post('/familyRecipes', async (req, res, next) => {
+//   try {
+//     const user_id = req.session.user_id;
+//     const recipe = req.body;
+//     if (!recipe || !recipe.id || !recipe.title || !recipe.origin_person || !recipe.occasion || !recipe.story) {
+//       return res.status(400).send("Invalid recipe data");
+//     }
+//     const newRecipe = await recipe_utils.createFamilyRecipe(recipe, user_id);
+//     res.status(201).send(newRecipe);
+//   } catch (error) {
+//     next(error);
+//   }
+// });
+// New: generate a new id for the recipe
+// POST /familyRecipes — server generates the ID
 router.post('/familyRecipes', async (req, res, next) => {
   try {
     const user_id = req.session.user_id;
-    const recipe = req.body;
-    if (!recipe || !recipe.id || !recipe.title || !recipe.origin_person || !recipe.occasion || !recipe.story) {
+    // Grab all fields except id
+    const recipe = { ...req.body };
+
+    // Validate required family fields
+    if (!recipe.title || !recipe.origin_person || !recipe.occasion || !recipe.story) {
       return res.status(400).send("Invalid recipe data");
     }
+
+    // 1) Generate ID here
+    recipe.id = uuidv4();
+
+    // 2) Create the family recipe record
     const newRecipe = await recipe_utils.createFamilyRecipe(recipe, user_id);
+
+    // 3) Return the created record
     res.status(201).send(newRecipe);
-  } catch (error) {
+  }
+  catch (error) {
     next(error);
   }
 });
