@@ -50,14 +50,15 @@ async function getThreeRandomRecipes(user_id) {
         apiKey: process.env.spooncular_apiKey
         }
     });   
-    thirdRecipe = axios.get(`${api_domain}/random`, {
-        params: {
-        apiKey: process.env.spooncular_apiKey
-        }
-    });
-    let recipes = await Promise.all([firstRecipe, secondRecipe, thirdRecipe]);
-    const recipes_list = [];
-
+    // thirdRecipe = axios.get(`${api_domain}/random`, {
+    //     params: {
+    //     apiKey: process.env.spooncular_apiKey
+    //     }
+    // });
+    // let recipes = await Promise.all([firstRecipe, secondRecipe, thirdRecipe]);
+    let recipes = await Promise.all([firstRecipe, secondRecipe]);
+    let recipes_list = [];
+    
     for (const recipe of recipes) {
     const r = recipe.data.recipes[0];
 
@@ -141,25 +142,11 @@ async function searchRecipesWithFilters(user_id, recipe_name, number = 5, filter
  */
 async function getRecipeDetails(user_id, recipe_id) {
   try {
-    // 1) Fetch from Spoonacular
-    const recipe_info = await getRecipeInformation(recipe_id);
+    // 1) Fetch full payload from Spoonacular
+    const { data } = await getRecipeInformation(recipe_id);
 
-    const {
-      id,
-      title,
-      readyInMinutes,
-      image,
-      aggregateLikes,
-      vegan,
-      vegetarian,
-      glutenFree,
-      servings,
-      instructions: fullInstructions,
-      extendedIngredients
-    } = recipe_info.data;
-
-    // Map ingredients array
-    const ingredients = extendedIngredients.map(ing => ({
+    // 2) Build ingredients[] exactly as before
+    const ingredients = (data.extendedIngredients || []).map(ing => ({
       id:       ing.id,
       name:     ing.name,
       amount:   ing.amount,
@@ -168,28 +155,38 @@ async function getRecipeDetails(user_id, recipe_id) {
       image:    `https://spoonacular.com/cdn/ingredients_100x100/${ing.image}`
     }));
 
-    // Build full recipe object
-    let recipe = {
-      id,
-      title,
-      readyInMinutes,
-      image,
-      popularity:     aggregateLikes,
-      vegan,
-      vegetarian,
-      glutenFree,
-      servings,
-      instructions:   fullInstructions,
-      ingredients
+    // 3) Normalize steps[] from analyzedInstructions or fallback HTML
+    let steps = [];
+    if (Array.isArray(data.analyzedInstructions) && data.analyzedInstructions.length) {
+      steps = data.analyzedInstructions[0].steps.map(s => ({
+        number: s.number,
+        step:   s.step
+      }));
+    } else if (data.instructions) {
+      const liMatches = Array.from(
+        data.instructions.matchAll(/<li>(.*?)<\/li>/gi)
+      );
+      steps = liMatches.map((m,i) => ({
+        number: i + 1,
+        step:   m[1].trim()
+      }));
+    }
+    
+    // 4) Spread in *all* the fields Spoonacular gave us...
+    const recipe = {
+      ...data,
+      ingredients,
+      steps
     };
 
+  
     // Enrich with watched/favorite/family flags
-    recipe = await addUserSessionInfo(user_id, recipe);
-    return recipe;
+    result = await addUserSessionInfo(user_id, recipe);
+    return result;
 
   } catch (error) {
-    // 2) On 404, attempt local DB fallback
-    if (error.response?.status === 404 && user_id) {
+    // 2) attempt local DB fallback
+    if (user_id) {
       // Check user-created recipes table
       const rows = await DButils.execQuery(
         `SELECT * FROM recipes WHERE id='${recipe_id}'`
@@ -236,9 +233,9 @@ async function getRecipeDetails(user_id, recipe_id) {
         vegetarian:     !!row.vegetarian,
         glutenFree:     !!row.glutenFree,
         servings:       row.servings,
-        instructions:   row.instructions,  // if you store a text blob
         ingredients,                          // from ingredients table
-        steps                                 // from instructions table
+        steps,                                 // from instructions table
+        instructions: steps.map(s => `${s.number}. ${s.step}`).join("<br/>") // synthesize the blob from steps
       };
 
       // Enrich with watched/favorite/family flags
@@ -385,9 +382,10 @@ function escapeSQL(val) {
  * Insert or update a recipe (all columns) + ingredients, steps, and link to user
  */
 async function addRecipe(recipe, user_id) {
-  // 1) ensure preview fields
+  // 1) validate preview fields
   validateRecipeData(recipe);
 
+  // 2) pull out everything; note we now grab `instructions` (string[]) and `steps` (object[])
   const {
     id,
     title,
@@ -413,23 +411,30 @@ async function addRecipe(recipe, user_id) {
     sourceName                = null,
     license                   = null,
     summary                   = null,
-    instructions              = null,
-    ingredients,
-    steps
+    ingredients               = [],
+    instructions              = [],    // <-- plain-text array
+    steps                     = []     // <-- optional step objects
   } = recipe;
 
-  // helper to quote or NULL‐ify
+  // decide which to use for inserting into instructions table:
+  const finalSteps = Array.isArray(steps) && steps.length > 0
+    ? steps
+    : Array.isArray(instructions)
+      ? instructions.map(text => ({ step: text }))
+      : [];
+
+  // helper to NULL or quoted string
   const safe = v => v === null ? 'NULL' : `'${escapeSQL(v)}'`;
 
-  // 2) upsert into recipes (all your columns)
-  const recipeQuery = `
+  // 3) upsert into recipes (omitting any instructions column)
+  const recipesQ = `
     INSERT INTO recipes
       (id, title, image, readyInMinutes, servings, popularity,
        vegan, vegetarian, glutenFree, dairyFree, veryHealthy,
        cheap, veryPopular, sustainable, lowFodmap,
        weightWatcherSmartPoints, gaps, healthScore,
        pricePerServing, sourceUrl, spoonacularSourceUrl,
-       sourceName, license, summary, instructions)
+       sourceName, license, summary)
     VALUES
       ('${escapeSQL(id)}', '${escapeSQL(title)}',
        ${safe(image)}, ${readyInMinutes}, ${servings}, ${popularity},
@@ -438,76 +443,76 @@ async function addRecipe(recipe, user_id) {
        ${lowFodmap}, ${weightWatcherSmartPoints}, ${safe(gaps)},
        ${healthScore}, ${pricePerServing}, ${safe(sourceUrl)},
        ${safe(spoonacularSourceUrl)}, ${safe(sourceName)},
-       ${safe(license)}, ${safe(summary)}, ${safe(instructions)})
+       ${safe(license)}, ${safe(summary)})
     ON DUPLICATE KEY UPDATE
-      title                    = VALUES(title),
-      image                    = VALUES(image),
-      readyInMinutes           = VALUES(readyInMinutes),
-      servings                 = VALUES(servings),
-      popularity               = VALUES(popularity),
-      vegan                    = VALUES(vegan),
-      vegetarian               = VALUES(vegetarian),
-      glutenFree               = VALUES(glutenFree),
-      dairyFree                = VALUES(dairyFree),
-      veryHealthy              = VALUES(veryHealthy),
-      cheap                    = VALUES(cheap),
-      veryPopular              = VALUES(veryPopular),
-      sustainable              = VALUES(sustainable),
-      lowFodmap                = VALUES(lowFodmap),
+      title               = VALUES(title),
+      image               = VALUES(image),
+      readyInMinutes      = VALUES(readyInMinutes),
+      servings            = VALUES(servings),
+      popularity          = VALUES(popularity),
+      vegan               = VALUES(vegan),
+      vegetarian          = VALUES(vegetarian),
+      glutenFree          = VALUES(glutenFree),
+      dairyFree           = VALUES(dairyFree),
+      veryHealthy         = VALUES(veryHealthy),
+      cheap               = VALUES(cheap),
+      veryPopular         = VALUES(veryPopular),
+      sustainable         = VALUES(sustainable),
+      lowFodmap           = VALUES(lowFodmap),
       weightWatcherSmartPoints = VALUES(weightWatcherSmartPoints),
-      gaps                     = VALUES(gaps),
-      healthScore              = VALUES(healthScore),
-      pricePerServing          = VALUES(pricePerServing),
-      sourceUrl                = VALUES(sourceUrl),
-      spoonacularSourceUrl     = VALUES(spoonacularSourceUrl),
-      sourceName               = VALUES(sourceName),
-      license                  = VALUES(license),
-      summary                  = VALUES(summary),
-      instructions             = VALUES(instructions);
+      gaps                = VALUES(gaps),
+      healthScore         = VALUES(healthScore),
+      pricePerServing     = VALUES(pricePerServing),
+      sourceUrl           = VALUES(sourceUrl),
+      spoonacularSourceUrl= VALUES(spoonacularSourceUrl),
+      sourceName          = VALUES(sourceName),
+      license             = VALUES(license),
+      summary             = VALUES(summary);
   `;
-  await DButils.execQuery(recipeQuery);
+  await DButils.execQuery(recipesQ);
 
-  // 3) upsert ingredients if provided
-  if (Array.isArray(ingredients)) {
-    await DButils.execQuery(`DELETE FROM ingredients WHERE recipe_id='${escapeSQL(id)}';`);
-    for (const ing of ingredients) {
-      const {
-        id: ingId     = null,
-        name,
-        amount,
-        unit          = '',
-        original      = null,
-        image: img    = null
-      } = ing;
-      const q = `
-        INSERT INTO ingredients
-          (recipe_id, ingredient_id, name, amount, unit, original, image)
-        VALUES
-          ('${escapeSQL(id)}', ${ingId}, '${escapeSQL(name)}',
-           ${amount}, '${escapeSQL(unit)}',
-           ${original? `'${escapeSQL(original)}'` : 'NULL'},
-           ${img?      `'${escapeSQL(img)}'`      : 'NULL'});
-      `;
-      await DButils.execQuery(q);
-    }
+  // 4) replace ingredients
+  await DButils.execQuery(
+    `DELETE FROM ingredients WHERE recipe_id='${escapeSQL(id)}';`
+  );
+  for (let idx = 0; idx < ingredients.length; idx++) {
+    const ing = ingredients[idx];
+    const ingId = idx + 1;
+    const {
+      name,
+      amount,
+      unit          = '',
+      original      = null,
+      image: img    = null
+    } = ing;
+    const q = `
+      INSERT INTO ingredients
+        (recipe_id, ingredient_id, name, amount, unit, original, image)
+      VALUES
+        ('${escapeSQL(id)}', ${ingId}, '${escapeSQL(name)}',
+         ${amount}, '${escapeSQL(unit)}',
+         ${original ? `'${escapeSQL(original)}'` : 'NULL'},
+         ${img      ? `'${escapeSQL(img)}'`      : 'NULL'});
+    `;
+    await DButils.execQuery(q);
   }
 
-  // 4) upsert steps if provided
-  if (Array.isArray(steps)) {
-    await DButils.execQuery(`DELETE FROM instructions WHERE recipe_id='${escapeSQL(id)}';`);
-    for (let idx = 0; idx < steps.length; idx++) {
-      const text = steps[idx].step ?? steps[idx].instruction ?? '';
-      const q = `
-        INSERT INTO instructions
-          (recipe_id, step_index, instruction)
-        VALUES
-          ('${escapeSQL(id)}', ${idx+1}, '${escapeSQL(text)}');
-      `;
-      await DButils.execQuery(q);
-    }
+  // 5) replace instructions (from finalSteps)
+  await DButils.execQuery(
+    `DELETE FROM instructions WHERE recipe_id='${escapeSQL(id)}';`
+  );
+  for (let i = 0; i < finalSteps.length; i++) {
+    const text = finalSteps[i].step ?? '';
+    const q = `
+      INSERT INTO instructions
+        (recipe_id, step_index, instruction)
+      VALUES
+        ('${escapeSQL(id)}', ${i + 1}, '${escapeSQL(text)}');
+    `;
+    await DButils.execQuery(q);
   }
 
-  // 5) link to user_recipes (now inlined—no ? placeholders)
+  // 6) link into user_recipes
   const linkQ = `
     INSERT INTO user_recipes (user_id, recipe_id)
     VALUES (${user_id}, '${escapeSQL(id)}')
@@ -515,45 +520,143 @@ async function addRecipe(recipe, user_id) {
   `;
   await DButils.execQuery(linkQ);
 
-  return recipe;
+  // return minimal preview back to client
+  return { id, title, image, readyInMinutes, servings, popularity,
+           vegan, vegetarian, glutenFree };
 }
-
-// /**
-//  * Req #9: Add a new recipe created by user
-//  */
 // async function addRecipe(recipe, user_id) {
+//   // 1) ensure preview fields
+//   validateRecipeData(recipe);
+
 //   const {
 //     id,
 //     title,
-//     image,
-//     readyInMinutes,
-//     popularity,
-//     vegan,
-//     vegetarian,
-//     glutenFree
+//     image                     = null,
+//     readyInMinutes            = null,
+//     servings                  = null,
+//     popularity                = 0,
+//     vegan                     = false,
+//     vegetarian                = false,
+//     glutenFree                = false,
+//     dairyFree                 = false,
+//     veryHealthy               = false,
+//     cheap                     = false,
+//     veryPopular               = false,
+//     sustainable               = false,
+//     lowFodmap                 = false,
+//     weightWatcherSmartPoints  = null,
+//     gaps                      = null,
+//     healthScore               = null,
+//     pricePerServing           = null,
+//     sourceUrl                 = null,
+//     spoonacularSourceUrl      = null,
+//     sourceName                = null,
+//     license                   = null,
+//     summary                   = null,
+//     instructions              = null,
+//     ingredients,
+//     steps
 //   } = recipe;
 
+//   // helper to quote or NULL‐ify
+//   const safe = v => v === null ? 'NULL' : `'${escapeSQL(v)}'`;
+
+//   // 2) upsert into recipes (all your columns)
 //   const recipeQuery = `
-//     INSERT INTO recipes (
-//       id, title, image, readyInMinutes, popularity,
-//       vegan, vegetarian, glutenFree
-//     )
-//     VALUES (
-//       '${id}', '${title}', '${image}', ${readyInMinutes}, ${popularity},
-//       ${vegan}, ${vegetarian}, ${glutenFree}
-//     );
+//     INSERT INTO recipes
+//       (id, title, image, readyInMinutes, servings, popularity,
+//        vegan, vegetarian, glutenFree, dairyFree, veryHealthy,
+//        cheap, veryPopular, sustainable, lowFodmap,
+//        weightWatcherSmartPoints, gaps, healthScore,
+//        pricePerServing, sourceUrl, spoonacularSourceUrl,
+//        sourceName, license, summary, instructions)
+//     VALUES
+//       ('${escapeSQL(id)}', '${escapeSQL(title)}',
+//        ${safe(image)}, ${readyInMinutes}, ${servings}, ${popularity},
+//        ${vegan}, ${vegetarian}, ${glutenFree}, ${dairyFree},
+//        ${veryHealthy}, ${cheap}, ${veryPopular}, ${sustainable},
+//        ${lowFodmap}, ${weightWatcherSmartPoints}, ${safe(gaps)},
+//        ${healthScore}, ${pricePerServing}, ${safe(sourceUrl)},
+//        ${safe(spoonacularSourceUrl)}, ${safe(sourceName)},
+//        ${safe(license)}, ${safe(summary)}, ${safe(instructions)})
+//     ON DUPLICATE KEY UPDATE
+//       title                    = VALUES(title),
+//       image                    = VALUES(image),
+//       readyInMinutes           = VALUES(readyInMinutes),
+//       servings                 = VALUES(servings),
+//       popularity               = VALUES(popularity),
+//       vegan                    = VALUES(vegan),
+//       vegetarian               = VALUES(vegetarian),
+//       glutenFree               = VALUES(glutenFree),
+//       dairyFree                = VALUES(dairyFree),
+//       veryHealthy              = VALUES(veryHealthy),
+//       cheap                    = VALUES(cheap),
+//       veryPopular              = VALUES(veryPopular),
+//       sustainable              = VALUES(sustainable),
+//       lowFodmap                = VALUES(lowFodmap),
+//       weightWatcherSmartPoints = VALUES(weightWatcherSmartPoints),
+//       gaps                     = VALUES(gaps),
+//       healthScore              = VALUES(healthScore),
+//       pricePerServing          = VALUES(pricePerServing),
+//       sourceUrl                = VALUES(sourceUrl),
+//       spoonacularSourceUrl     = VALUES(spoonacularSourceUrl),
+//       sourceName               = VALUES(sourceName),
+//       license                  = VALUES(license),
+//       summary                  = VALUES(summary),
+//       instructions             = VALUES(instructions);
 //   `;
-
-//   const userRecipeQuery = `
-//     INSERT INTO user_recipes (user_id, recipe_id)
-//     VALUES (${user_id}, '${id}');
-//   `;
-
 //   await DButils.execQuery(recipeQuery);
-//   await DButils.execQuery(userRecipeQuery);
+
+//   // 3) upsert ingredients if provided
+//   if (Array.isArray(ingredients)) {
+//     await DButils.execQuery(`DELETE FROM ingredients WHERE recipe_id='${escapeSQL(id)}';`);
+//     for (const ing of ingredients) {
+//       const {
+//         id: ingId     = null,
+//         name,
+//         amount,
+//         unit          = '',
+//         original      = null,
+//         image: img    = null
+//       } = ing;
+//       const q = `
+//         INSERT INTO ingredients
+//           (recipe_id, ingredient_id, name, amount, unit, original, image)
+//         VALUES
+//           ('${escapeSQL(id)}', ${ingId}, '${escapeSQL(name)}',
+//            ${amount}, '${escapeSQL(unit)}',
+//            ${original? `'${escapeSQL(original)}'` : 'NULL'},
+//            ${img?      `'${escapeSQL(img)}'`      : 'NULL'});
+//       `;
+//       await DButils.execQuery(q);
+//     }
+//   }
+
+//   // 4) upsert steps if provided
+//   if (Array.isArray(steps)) {
+//     await DButils.execQuery(`DELETE FROM instructions WHERE recipe_id='${escapeSQL(id)}';`);
+//     for (let idx = 0; idx < steps.length; idx++) {
+//       const text = steps[idx].step ?? steps[idx].instruction ?? '';
+//       const q = `
+//         INSERT INTO instructions
+//           (recipe_id, step_index, instruction)
+//         VALUES
+//           ('${escapeSQL(id)}', ${idx+1}, '${escapeSQL(text)}');
+//       `;
+//       await DButils.execQuery(q);
+//     }
+//   }
+
+//   // 5) link to user_recipes (now inlined—no ? placeholders)
+//   const linkQ = `
+//     INSERT INTO user_recipes (user_id, recipe_id)
+//     VALUES (${user_id}, '${escapeSQL(id)}')
+//     ON DUPLICATE KEY UPDATE recipe_id = recipe_id;
+//   `;
+//   await DButils.execQuery(linkQ);
+
 //   return recipe;
 // }
-
 
 
 /**
@@ -589,45 +692,109 @@ async function markAsWatched(user_id, recipe_id){
  * Create a new family recipe
  */
 async function createFamilyRecipe(recipe, user_id) {
-  const {
-    id,
-    title,
-    image,
-    readyInMinutes,
-    popularity,
-    vegan,
-    vegetarian,
-    glutenFree,
-    origin_person,
-    occasion,
-    story
-  } = recipe;
+  // 1) Generate an ID if one wasn’t provided
+  if (!recipe.id) {
+    recipe.id = uuidv4();
+  }
 
-  // Step 1: Save base recipe data
+  // 2) Call addRecipe with the full payload so all fields persist
+  //    addRecipe will write into recipes, ingredients, and instructions tables
   await addRecipe({
-    id,
-    title,
-    image,
-    readyInMinutes,
-    popularity,
-    vegan,
-    vegetarian,
-    glutenFree
+    id:                     recipe.id,
+    title:                  recipe.title,
+    image:                  recipe.image,
+    readyInMinutes:         recipe.readyInMinutes,
+    servings:               recipe.servings,
+    popularity:             recipe.popularity,
+    vegan:                  recipe.vegan,
+    vegetarian:             recipe.vegetarian,
+    glutenFree:             recipe.glutenFree,
+    dairyFree:              recipe.dairyFree,
+    veryHealthy:            recipe.veryHealthy,
+    cheap:                  recipe.cheap,
+    veryPopular:            recipe.veryPopular,
+    sustainable:            recipe.sustainable,
+    lowFodmap:              recipe.lowFodmap,
+    weightWatcherSmartPoints: recipe.weightWatcherSmartPoints,
+    gaps:                   recipe.gaps,
+    healthScore:            recipe.healthScore,
+    pricePerServing:        recipe.pricePerServing,
+    sourceUrl:              recipe.sourceUrl,
+    spoonacularSourceUrl:   recipe.spoonacularSourceUrl,
+    sourceName:             recipe.sourceName,
+    license:                recipe.license,
+    summary:                recipe.summary,
+    // full instructions text (if you store blob of all steps)
+    instructions:           recipe.instructions,
+    // arrays of objects for detailed tables:
+    ingredients:            recipe.ingredients || [],
+    steps:                  recipe.steps       || [],
+
+    // family‐only fields get passed through too:
+    origin_person:          recipe.origin_person,
+    occasion:               recipe.occasion,
+    story:                  recipe.story
   }, user_id);
 
-  // Step 2: Save family-specific metadata
-  const query = `
-    INSERT INTO family_recipes_info (recipe_id, user_id, origin_person, occasion, story)
-    VALUES ('${id}', ${user_id}, '${origin_person}', '${occasion}', '${story}');
+  // 3) Persist the family‐only metadata
+  const metaQ = `
+    INSERT INTO family_recipes_info
+      (recipe_id, user_id, origin_person, occasion, story)
+    VALUES
+      ('${recipe.id}', ${user_id},
+       '${recipe.origin_person.replace(/'/g, "''")}',
+       '${recipe.occasion.replace(/'/g, "''")}',
+       '${recipe.story.replace(/'/g, "''")}')
+    ON DUPLICATE KEY UPDATE
+      origin_person = VALUES(origin_person),
+      occasion      = VALUES(occasion),
+      story         = VALUES(story);
   `;
+  await DButils.execQuery(metaQ);
 
-  await DButils.execQuery(query);
-
-  return {
-    message: "Family recipe created successfully",
-    recipe_id: id
-  };
+  // 4) Return the full recipe ID so the front end can redirect or fetch it
+  return { recipe_id: recipe.id };
 }
+// async function createFamilyRecipe(recipe, user_id) {
+//   const {
+//     id,
+//     title,
+//     image,
+//     readyInMinutes,
+//     popularity,
+//     vegan,
+//     vegetarian,
+//     glutenFree,
+//     origin_person,
+//     occasion,
+//     story
+//   } = recipe;
+
+//   // Step 1: Save base recipe data
+//   await addRecipe({
+//     id,
+//     title,
+//     image,
+//     readyInMinutes,
+//     popularity,
+//     vegan,
+//     vegetarian,
+//     glutenFree
+//   }, user_id);
+
+//   // Step 2: Save family-specific metadata
+//   const query = `
+//     INSERT INTO family_recipes_info (recipe_id, user_id, origin_person, occasion, story)
+//     VALUES ('${id}', ${user_id}, '${origin_person}', '${occasion}', '${story}');
+//   `;
+
+//   await DButils.execQuery(query);
+
+//   return {
+//     message: "Family recipe created successfully",
+//     recipe_id: id
+//   };
+// }
 
 
 /**

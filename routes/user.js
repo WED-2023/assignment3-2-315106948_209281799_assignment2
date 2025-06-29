@@ -6,6 +6,7 @@ const user_utils = require("./utils/user_utils");
 const recipe_utils = require("./utils/recipes_utils");
 const { v4: uuidv4 } = require('uuid');
 
+
 /**
  * Middleware: Authenticate all requests
  * - Logs session data
