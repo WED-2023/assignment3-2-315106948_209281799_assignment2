@@ -111,7 +111,7 @@ router.post("/Login", async (req, res, next) => {
 router.post("/Logout", function (req, res) {
   // Check if the user is logged in
   if (!req.session || !req.session.user_id) {
-    return res.status(401).send({ success: false, message: "Not logged in" });
+    return ; //res.status(401).send({ success: false, message: "Not logged in" });
   }
   console.log("session user_id Logout: " + req.session.user_id);
   req.session.reset(); // reset the session info --> send cookie when  req.session == undefined!!

@@ -136,6 +136,8 @@ router.get("/meal-plan", async (req, res, next) => {
       return { ...r, order };
     }).sort((a, b) => a.order - b.order);
 
+    console.log("Session size (JSON):", JSON.stringify(req.session).length, "bytes");
+
     res.status(200).send(result);
   } catch (err) {
     next(err);
@@ -264,75 +266,34 @@ router.get("/:recipeId/progress", async (req, res, next) => {
     if (!req.session || !req.user_id) return res.status(401).send("Unauthorized");
 
     if (!req.session.recipeProgress) req.session.recipeProgress = {};
-    if (!req.session.recipeDetails) req.session.recipeDetails = {};
+    // if (!req.session.recipeDetails) req.session.recipeDetails = {};
+    const details = await recipes_utils.getRecipeDetails(req.user_id, recipeId);
 
     // If progress already exists
     if (req.session.recipeProgress[recipeId]) {
       return res.status(200).send({
         steps: req.session.recipeProgress[recipeId].steps,
-        details: req.session.recipeDetails[recipeId]
+        // details: req.session.recipeDetails[recipeId]
+        details: details
       });
     }
 
     // Fetch fresh
     const steps = await recipes_utils.getPreparationSteps(recipeId);
-    const details = await recipes_utils.getRecipeDetails(req.user_id, recipeId);
 
     const stepsWithStatus = steps.map(step => ({
-      ...step,
+      number: step.step,
       isDone: false
     }));
 
     req.session.recipeProgress[recipeId] = { steps: stepsWithStatus };
-    req.session.recipeDetails[recipeId] = details;
+    // req.session.recipeDetails[recipeId] = details;
 
     res.status(200).send({ steps: stepsWithStatus, details });
   } catch (error) {
     next(error);
   }
 });
-// router.get("/:recipeId/progress", async (req, res, next) => {
-//   try {
-//     const recipeId = req.params.recipeId;
-//     if (!recipeId) {
-//       return res.status(400).send("Recipe ID is required.");
-//     }
-
-//     if (!req.session || !req.user_id) {
-//       return res.status(401).send("Unauthorized: No active session.");
-//     }
-
-//     // Initialize storage objects
-//     if (!req.session.recipeProgress) req.session.recipeProgress = null;
-//     if (!req.session.recipeDetails) req.session.recipeDetails = null;
-//     if (req.session.recipeProgress?.recipeId === recipeId) {
-//       return res.status(200).send({
-//         steps: req.session.recipeProgress.steps,
-//         details: req.session.recipeDetails
-//       });
-//     }
-
-//     // Fetch new data
-//     const steps = await recipes_utils.getPreparationSteps(recipeId);
-//     const details = await recipes_utils.getRecipeDetails(req.user_id, recipeId);
-
-//     const stepsWithStatus = steps.map(step => ({
-//       ...step,
-//       isDone: false
-//     }));
-
-//     // Save only this recipe’s progress/details
-//     req.session.recipeProgress = {
-//       recipeId,
-//       steps: stepsWithStatus
-//     };
-//     req.session.recipeDetails = details;
-
-//     res.status(200).send({ steps: stepsWithStatus, details });
-//   } catch (error) {
-//     next(error);
-//   }
-// });
 
 
 /**
@@ -347,33 +308,39 @@ router.post("/:recipeId/progress", async (req, res) => {
     if (!recipeId) return res.status(400).send("Recipe ID is required.");
     if (!req.session || !req.user_id) return res.status(401).send("Unauthorized");
 
-    if (!req.session.recipeProgress) req.session.recipeProgress = {};
-    if (!req.session.recipeDetails) req.session.recipeDetails = {};
+    if (!req.session.recipeProgress){
+       req.session.recipeProgress = {};
+    }
+    // if (!req.session.recipeDetails){
+    //    req.session.recipeDetails = {};
+    // }
 
     // Initialize if missing
     if (!req.session.recipeProgress[recipeId]) {
       const originalSteps = await recipes_utils.getPreparationSteps(recipeId);
       req.session.recipeProgress[recipeId] = {
         steps: originalSteps.map(step => ({
-          ...step,
+          number: step.step,
           isDone: false
         }))
       };
     }
 
-    if (!req.session.recipeDetails[recipeId]) {
-      const originalDetails = await recipes_utils.getRecipeDetails(req.user_id, recipeId);
-      req.session.recipeDetails[recipeId] = originalDetails;
-    }
+    // if (!req.session.recipeDetails[recipeId]) {
+    //   const originalDetails = await recipes_utils.getRecipeDetails(req.user_id, recipeId);
+    //   req.session.recipeDetails[recipeId] = originalDetails;
+    // }
+    const originalDetails = await recipes_utils.getRecipeDetails(req.user_id, recipeId);
+    let recipeDetails = originalDetails;
 
     // Update servings & ingredients
     if (multiplier) {
-      const originalDetails = await recipes_utils.getRecipeDetails(req.user_id, recipeId);
-      req.session.recipeDetails[recipeId].ingredients = originalDetails.ingredients.map(ing => ({
+      // const originalDetails = await recipes_utils.getRecipeDetails(req.user_id, recipeId);
+      recipeDetails.ingredients = originalDetails.ingredients.map(ing => ({
         ...ing,
         amount: Math.round((ing.amount * multiplier + Number.EPSILON) * 100) / 100
       }));
-      req.session.recipeDetails[recipeId].servings = Math.round((originalDetails.servings * multiplier + Number.EPSILON) * 100) / 100;
+      recipeDetails.servings = Math.round((originalDetails.servings * multiplier + Number.EPSILON) * 100) / 100;
     }
 
     // Save full steps array
@@ -390,79 +357,15 @@ router.post("/:recipeId/progress", async (req, res) => {
     ) {
       req.session.recipeProgress[recipeId].steps[stepIndex-1].isDone = isDone;
     }
-
+    
     res.status(200).send({
       steps: req.session.recipeProgress[recipeId].steps,
-      details: req.session.recipeDetails[recipeId]
+      details: recipeDetails
     });
   } catch (error) {
     res.status(500).send("Error updating step progress: " + error.message);
   }
 });
-
-// router.post("/:recipeId/progress", async (req, res) => {
-//   try {
-//     const recipeId = req.params.recipeId;
-//     if (!recipeId) {
-//       return res.status(400).send("Recipe ID is required.");
-//     }
-//     const { stepIndex, isDone, multiplier } = req.body;
-
-//     if (!req.session || !req.user_id) {
-//       return res.status(401).send("Unauthorized: No active session.");
-//     }
-
-//     if (!req.session.recipeProgress || req.session.recipeProgress.recipeId !== recipeId) {
-//       const steps = await recipes_utils.getPreparationSteps(recipeId);
-//       const details = await recipes_utils.getRecipeDetails(req.user_id, recipeId);
-//       const m = parseFloat(multiplier) || 1;
-
-//       if (m !== 1){  // If a multiplier is provided, adjust ingredient amounts
-//         details.ingredients = details.ingredients.map(ing => ({
-//           ...ing,
-//           amount: Math.round((ing.amount * m + Number.EPSILON) * 100) / 100
-//         }));
-//         details.servings = Math.round((details.servings * m + Number.EPSILON) * 100) / 100;
-//       }
-
-//       const stepsWithStatus = steps.map(step => ({
-//         ...step,
-//         isDone: false
-//       }));
-
-//       req.session.recipeProgress = {
-//         recipeId,
-//         steps: stepsWithStatus
-//       };
-//       req.session.recipeDetails = details;
-//     }
-//     else {
-//       // If the recipe is already in session, use existing progress
-//       // check if need to adjust ingredients amounts
-//       const m = parseFloat(multiplier) || 1;
-//       if (m !== 1) {
-//         // re-fetch the recipe details to adjust ingredients
-//         const originalDetails = await recipes_utils.getRecipeDetails(req.user_id, recipeId);
-//         req.session.recipeDetails.ingredients = originalDetails.ingredients.map(ing => ({
-//           ...ing,
-//           amount: Math.round((ing.amount * m + Number.EPSILON) * 100) / 100
-//         }));
-        
-//       }
-//     }
-
-//     if (Number.isInteger(stepIndex) && stepIndex >= 0 && stepIndex < req.session.recipeProgress.steps.length && typeof isDone === "boolean") {
-//       req.session.recipeProgress.steps[stepIndex].isDone = isDone;
-//     }
-
-//     res.status(200).send({
-//       steps: req.session.recipeProgress.steps,
-//       details: req.session.recipeDetails
-//     });
-//   } catch (error) {
-//     res.status(500).send("Error updating step progress: " + error.message);
-//   }
-// });
 
 
 module.exports = router;
