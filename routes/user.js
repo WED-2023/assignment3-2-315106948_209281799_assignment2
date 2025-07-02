@@ -5,6 +5,23 @@ const DButils = require("./utils/DButils");
 const user_utils = require("./utils/user_utils");
 const recipe_utils = require("./utils/recipes_utils");
 const { v4: uuidv4 } = require('uuid');
+const multer = require("multer");
+const path = require("path");
+
+
+// Middleware to handle file uploads
+// This will save uploaded files to the "uploads" directory with a unique name
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, "uploads/"); 
+  },
+  filename: function (req, file, cb) {
+    const uniqueName = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, uniqueName + path.extname(file.originalname));
+  },
+});
+
+const upload = multer({ storage });
 
 
 /**
@@ -121,33 +138,52 @@ router.get('/favorites', async (req,res,next) => {
 //     next(error);
 //   }
 // });
+
+
 // New: generate a new id for the recipe
 router.post('/myRecipes', async (req, res, next) => {
   try {
+    //console debuging 
+    console.log("==> [DEBUG] Incoming /myRecipes request");
+    console.log("Session user_id:", req.session.user_id);
+    console.log("Raw body received:", req.body);
+
     const user_id = req.session.user_id;
     // Grab all fields except id from the client
     const recipe = { ...req.body };
 
     // 1) Generate the ID on the server
     recipe.id = uuidv4();
+    console.log("Generated recipe ID:", recipe.id);
+
 
     // 2) Validate your preview fields (title, image, etc.)
     //    Make sure your validateRecipeData no longer expects recipe.id from the client.
+    console.log("Validating recipe...");
     recipe_utils.validateRecipeData(recipe);
+    console.log("Validation passed ✅");
 
     // 3) Persist recipe (ingredients + steps if present)
+    console.log("Calling addRecipe...");
     const newRecipe = await recipe_utils.addRecipe(recipe, user_id);
-
+    console.log("Recipe saved successfully:", newRecipe);
+    
     // 4) Return the newly created recipe (including its server-generated ID)
     res.status(201).send(newRecipe);
   }
   catch (error) {
+    console.error("❌ Error in /myRecipes:", error.message);
+    console.error(error.stack);
+
     if (error.message.startsWith("Missing required")) {
       return res.status(400).send(error.message);
     }
+
     next(error);
   }
 });
+
+
 
 /**
  * GET /myRecipes
@@ -179,16 +215,19 @@ router.get('/myRecipes', async (req, res, next) => {
 //     next(error);
 //   }
 // });
+
 // New: generate a new id for the recipe
 // POST /familyRecipes — server generates the ID
 router.post('/familyRecipes', async (req, res, next) => {
   try {
+    console.log("Received family recipe:", req.body);
     const user_id = req.session.user_id;
     // Grab all fields except id
     const recipe = { ...req.body };
 
     // Validate required family fields
     if (!recipe.title || !recipe.origin_person || !recipe.occasion || !recipe.story) {
+      console.log("Invalid recipe data:", recipe);
       return res.status(400).send("Invalid recipe data");
     }
 

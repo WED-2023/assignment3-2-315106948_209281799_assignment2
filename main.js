@@ -1,8 +1,8 @@
 require("dotenv").config();
 //#region express configures
-var express = require("express");
-var path = require("path");
-var logger = require("morgan");
+const  express = require("express");
+const  path = require("path");
+const  logger = require("morgan");
 const session = require("client-sessions");
 const DButils = require("./routes/utils/DButils");
 const cors = require("cors");
@@ -31,6 +31,9 @@ app.use(express.urlencoded({ extended: false })); // parse application/x-www-for
 app.use(express.static(path.join(__dirname, "public"))); //To serve static files such as images, CSS files, and JavaScript files
 //local:
 app.use(express.static(path.join(__dirname, "dist")));
+// Serve uploaded images
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 //remote:
 // app.use(express.static(path.join(__dirname, '../assignment-3-3-frontend/dist')));
 
